@@ -1,0 +1,15 @@
+{
+  "name": "com.gamebeast.sdk",
+  "displayName": "Gamebeast SDK",
+  "version": "0.1.0",
+  "unity": "6000.2",
+  "description": "Runtime SDK for Gamebeast: markers, requests, and core runtime.",
+  "author": {
+    "name": "Gamebeast, Inc.",
+    "email": "devrel@gamebeast.gg",
+    "url": "https://gamebeast.gg"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}
