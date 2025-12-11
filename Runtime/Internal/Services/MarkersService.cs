@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Gamebeast.Runtime.Internal.Utils;
-using Gamebeast.Runtime;
 
 namespace Gamebeast.Runtime.Internal.Services
 {
@@ -40,13 +39,21 @@ namespace Gamebeast.Runtime.Internal.Services
         private float _timeSinceLastFlush = 0f;
         private const int FlushIntervalSeconds = 10;
 
-        private void FlushMarkers_Locked()
+        private void FlushMarkers()
         {
-            if (_markerCache.Count == 0) return;
+            MarkerPayload[] snapshot;
+
+            lock (_markerCacheLock)
+            {
+                if (_markerCache.Count == 0) return;
+
+                snapshot = _markerCache.ToArray();
+                _markerCache.Clear();
+            }
 
             var wrapper = new MarkersWrapper
             {
-                markers = _markerCache.ToArray()
+                markers = snapshot
             };
 
             GBRequest.MakeRequestAsync<string>(GBRequestType.PostMarker, wrapper).ContinueWith(task =>
@@ -61,15 +68,6 @@ namespace Gamebeast.Runtime.Internal.Services
                     Debug.LogError($"[MarkersService] Error sending markers: {task.Exception}");
                 }
             });
-
-            _markerCache.Clear();
-        }
-        private void FlushMarkers()
-        {
-            lock (_markerCacheLock)
-            {
-                FlushMarkers_Locked();
-            }
         }
         private static bool IsPrimitiveLike(Type type)
         {
@@ -101,14 +99,20 @@ namespace Gamebeast.Runtime.Internal.Services
                 }
             };
 
+            var shouldFlush = false;
             lock (_markerCacheLock)
             {
                 _markerCache.Add(marker);
 
                 if (_markerCache.Count >= 10)
                 {
-                    FlushMarkers_Locked();
+                    shouldFlush = true;
                 }
+            }
+
+            if (shouldFlush)
+            {
+                FlushMarkers();
             }
         }
         public void SendMarker<TValue>(string markerName, TValue value)
