@@ -34,12 +34,13 @@ namespace Gamebeast.Runtime.Internal.Services
     
     internal sealed class MarkersService : IMarkersService
     {
-    private static readonly List<MarkerPayload> _markerCache = new List<MarkerPayload>();
+        private static readonly List<MarkerPayload> _markerCache = new List<MarkerPayload>();
+        private static readonly object _markerCacheLock = new object();
 
         private float _timeSinceLastFlush = 0f;
         private const int FlushIntervalSeconds = 10;
 
-        private void FlushMarkers()
+        private void FlushMarkers_Locked()
         {
             if (_markerCache.Count == 0) return;
 
@@ -62,6 +63,13 @@ namespace Gamebeast.Runtime.Internal.Services
             });
 
             _markerCache.Clear();
+        }
+        private void FlushMarkers()
+        {
+            lock (_markerCacheLock)
+            {
+                FlushMarkers_Locked();
+            }
         }
         private static bool IsPrimitiveLike(Type type)
         {
@@ -93,15 +101,15 @@ namespace Gamebeast.Runtime.Internal.Services
                 }
             };
 
-            _markerCache.Add(marker);
-
-            if (_markerCache.Count >= 10)
+            lock (_markerCacheLock)
             {
-                FlushMarkers();
+                _markerCache.Add(marker);
+
+                if (_markerCache.Count >= 10)
+                {
+                    FlushMarkers_Locked();
+                }
             }
-
-
-
         }
         public void SendMarker<TValue>(string markerName, TValue value)
         {
