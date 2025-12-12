@@ -43,6 +43,8 @@ namespace Gamebeast.Runtime.Internal.Services
         {
             MarkerPayload[] snapshot;
 
+            _timeSinceLastFlush = 0f;
+
             lock (_markerCacheLock)
             {
                 if (_markerCache.Count == 0) return;
@@ -131,15 +133,15 @@ namespace Gamebeast.Runtime.Internal.Services
         /// </summary>
         internal void Tick(float deltaTime)
         {
-            lock (_markerCache) {
+            lock (_markerCacheLock) {
                 if (_markerCache.Count == 0)
                 {
                     _timeSinceLastFlush = 0f;
                     return;
                 }
+                _timeSinceLastFlush += deltaTime;
             }
             
-            _timeSinceLastFlush += deltaTime;
 
             if (_timeSinceLastFlush >= FlushIntervalSeconds)
             {
