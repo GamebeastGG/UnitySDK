@@ -131,12 +131,14 @@ namespace Gamebeast.Runtime.Internal.Services
         /// </summary>
         internal void Tick(float deltaTime)
         {
-            if (_markerCache.Count == 0)
-            {
-                _timeSinceLastFlush = 0f;
-                return;
+            lock (_markerCache) {
+                if (_markerCache.Count == 0)
+                {
+                    _timeSinceLastFlush = 0f;
+                    return;
+                }
             }
-
+            
             _timeSinceLastFlush += deltaTime;
 
             if (_timeSinceLastFlush >= FlushIntervalSeconds)
