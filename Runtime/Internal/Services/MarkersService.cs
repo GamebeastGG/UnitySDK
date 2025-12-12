@@ -133,6 +133,7 @@ namespace Gamebeast.Runtime.Internal.Services
         /// </summary>
         internal void Tick(float deltaTime)
         {
+            var shouldFlush = false;
             lock (_markerCacheLock) {
                 if (_markerCache.Count == 0)
                 {
@@ -140,11 +141,14 @@ namespace Gamebeast.Runtime.Internal.Services
                     return;
                 }
                 _timeSinceLastFlush += deltaTime;
+
+                if (_timeSinceLastFlush >= FlushIntervalSeconds)
+                {
+                    shouldFlush = true;
+                }
             }
             
-
-            if (_timeSinceLastFlush >= FlushIntervalSeconds)
-            {
+            if (shouldFlush == true) {
                 FlushMarkers();
             }
         }

@@ -44,9 +44,6 @@ namespace Gamebeast.Internal
             _apiKey = apiKey;
             _initialized = true;
 
-            Debug.Log($"[Gamebeast] Initialized with API key: {_apiKey}");
-            // TODO: set up queues, networking, etc.
-
             GBRequest.SetApiKey(_apiKey);
 
             // Register built-in services that should live on the [Gamebeast] object

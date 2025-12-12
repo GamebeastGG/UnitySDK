@@ -98,14 +98,14 @@ namespace Gamebeast.Runtime.Internal.Utils
 					if (body == null)
 					{
 						jsonBody = "{}";
-						Debug.Log("[Requester] POST body is null, sending empty JSON object {}");
+						//Debug.Log("[Requester] POST body is null, sending empty JSON object {}");
 					}
 					else
 					{
 						jsonBody = JsonConvert.SerializeObject(body);
 					}
 
-					Debug.Log($"[Requester] POST {url} with body: {jsonBody} and {(body != null ? body.GetType().Name : "<null>")}");
+					//Debug.Log($"[Requester] POST {url} with body: {jsonBody} and {(body != null ? body.GetType().Name : "<null>")}");
 
 					byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
 					request.uploadHandler = new UploadHandlerRaw(bodyRaw);
