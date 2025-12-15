@@ -1,0 +1,14 @@
+{
+	"name": "Gamebeast.Runtime",
+	"rootNamespace": "Gamebeast.Runtime",
+	"references": [],
+	"includePlatforms": [],
+	"excludePlatforms": [],
+	"allowUnsafeCode": false,
+	"overrideReferences": false,
+	"precompiledReferences": [],
+	"autoReferenced": true,
+	"defineConstraints": [],
+	"versionDefines": [],
+	"noEngineReferences": false
+}
