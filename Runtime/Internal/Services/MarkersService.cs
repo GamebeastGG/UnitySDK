@@ -58,19 +58,22 @@ namespace Gamebeast.Runtime.Internal.Services
                 markers = snapshot
             };
 
-            GBRequest.MakeRequestAsync<string>(GBRequestType.PostMarker, wrapper).ContinueWith(task =>
-            {
-                if (task.IsCompletedSuccessfully)
-                {
-                    Debug.Log("[MarkersService] Successfully sent markers.");
-                }
-                else
-                {
-                    // TODO: implement retry logic
-                    Debug.LogError($"[MarkersService] Error sending markers: {task.Exception}");
-                }
-            });
+			SendMarkersAsync(wrapper);
         }
+
+		private async void SendMarkersAsync(MarkersWrapper wrapper)
+		{
+			try
+			{
+				await GBRequest.MakeRequestAsync<string>(GBRequestType.PostMarker, wrapper);
+				Debug.Log("[MarkersService] Successfully sent markers.");
+			}
+			catch (Exception ex)
+			{
+				// TODO: implement retry logic
+				Debug.LogError($"[MarkersService] Error sending markers: {ex}");
+			}
+		}
         private static bool IsPrimitiveLike(Type type)
         {
             return type.IsPrimitive || type == typeof(string) || type == typeof(decimal);

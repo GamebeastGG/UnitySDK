@@ -34,9 +34,9 @@ namespace Gamebeast.Runtime.Internal.Utils
 		/// <summary>
 		/// Perform a POST request. The body object is serialized to JSON.
 		/// </summary>
-		public static Task<TResponse> PostAsync<TResponse>(string path, object body = null, Dictionary<string, string> headers = null)
+		public static Task<TResponse> PostAsync<TResponse>(string path, object body = null, Dictionary<string, string> headers = null, string method = UnityWebRequest.kHttpVerbPOST)
 		{
-			return SendAsync<TResponse>(UnityWebRequest.kHttpVerbPOST, path, body, headers);
+			return SendAsync<TResponse>(method, path, body, headers);
 		}
 
 		/// <summary>
@@ -44,16 +44,23 @@ namespace Gamebeast.Runtime.Internal.Utils
 		/// </summary>
 		private static async Task<TResponse> SendAsync<TResponse>(string method, string path, object body, Dictionary<string, string> headers = null)
 		{
-			var json = await SendAsync(method, path, body, headers).ConfigureAwait(false);
+			var json = await SendAsync(method, path, body, headers);
 
 			if (string.IsNullOrEmpty(json))
 			{
 				return default;
 			}
 
+			// JsonUtility cannot deserialize raw JSON into `string`.
+			// If callers want the raw body, allow `TResponse == string`.
+			if (typeof(TResponse) == typeof(string))
+			{
+				return (TResponse)(object)json;
+			}
+
 			try
 			{
-				return JsonUtility.FromJson<TResponse>(json);
+				return JsonConvert.DeserializeObject<TResponse>(json);
 			}
 			catch (Exception ex)
 			{
@@ -123,7 +130,7 @@ namespace Gamebeast.Runtime.Internal.Utils
 
 				request.SetRequestHeader("Accept", "application/json");
 
-				await request.SendWebRequest();
+				await SendWebRequestAsync(request);
 
 #if UNITY_2020_1_OR_NEWER 
 				if (request.result == UnityWebRequest.Result.ConnectionError ||
@@ -142,6 +149,14 @@ namespace Gamebeast.Runtime.Internal.Utils
 
 				return request.downloadHandler.text;
 			}
+		}
+
+		private static Task SendWebRequestAsync(UnityWebRequest request)
+		{
+			var operation = request.SendWebRequest();
+			var tcs = new TaskCompletionSource<object>();
+			operation.completed += _ => tcs.TrySetResult(null);
+			return tcs.Task;
 		}
 
 		/// <summary>

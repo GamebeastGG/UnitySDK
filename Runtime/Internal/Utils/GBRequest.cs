@@ -1,26 +1,32 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using UnityEditor.UI;
+using UnityEngine.Networking;
 
 namespace Gamebeast.Runtime.Internal.Utils
 {
     public enum GBRequestType
     {
         GetSdkVersion,
-        PostMarker
+        PostMarker,
+        GetRequest,
+        StartRequest,
+        CompleteRequest,
+        GetConfigs
+
         // add more as needed
     }
 
     public enum GBRequestMethod
     {
         GET,
-        POST
+        POST,
+        PUT
     }
 
     public class GBRequestInfo
     {
-        public GBRequestMethod Method;
+        public string Method;
         public string Path;
     }
 
@@ -40,8 +46,12 @@ namespace Gamebeast.Runtime.Internal.Utils
         private static string _apiKey;
         private static readonly Dictionary<GBRequestType, GBRequestInfo> GBRequestTypeMap = new Dictionary<GBRequestType, GBRequestInfo>
         {
-            { GBRequestType.GetSdkVersion, new GBRequestInfo { Method = GBRequestMethod.POST, Path = "/v1/sdk/version" } },
-            { GBRequestType.PostMarker, new GBRequestInfo { Method = GBRequestMethod.POST, Path = "/v1/markers" } }
+            { GBRequestType.GetSdkVersion, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/sdk/version" } },
+            { GBRequestType.PostMarker, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/markers" } },
+            { GBRequestType.GetRequest, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbGET, Path = "/v1/requests" } },
+            { GBRequestType.StartRequest, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPUT, Path = "/v1/requests/started" } },
+            { GBRequestType.CompleteRequest, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/requests/completed" } },
+            { GBRequestType.GetConfigs, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbGET, Path = "/v1/configurations" } }
         };
 
         public static void SetApiKey(string apiKey)
@@ -75,12 +85,10 @@ namespace Gamebeast.Runtime.Internal.Utils
 
             switch (method)
             {
-                case GBRequestMethod.GET:
+                case UnityWebRequest.kHttpVerbGET:
                     return Requester.GetAsync<TResponse>("/sdk" + path, body, headers);
-                case GBRequestMethod.POST:
-                    return Requester.PostAsync<TResponse>("/sdk" + path, body, headers);
                 default:
-                    throw new ArgumentOutOfRangeException(nameof(method), method, null); // This should never happen
+                    return Requester.PostAsync<TResponse>("/sdk" + path, body, headers, method);
             }
         }
     }

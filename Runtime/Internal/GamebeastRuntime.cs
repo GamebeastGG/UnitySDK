@@ -14,13 +14,17 @@ namespace Gamebeast.Internal
         public static GamebeastRuntime Instance => EnsureInstance();
         
         // Registry for SDK services that live on the [Gamebeast] object
-        private readonly Dictionary<Type, object> _services = new();
+        private readonly Dictionary<Type, object> _services = new Dictionary<Type, object>();
         private static GamebeastRuntime EnsureInstance()
         {
             if (_instance != null) return _instance;
 
             // Try to find an existing instance (in case user dropped a prefab)
+#if UNITY_2022_2_OR_NEWER
             _instance = UnityEngine.Object.FindFirstObjectByType<GamebeastRuntime>();
+#else
+            _instance = UnityEngine.Object.FindObjectOfType<GamebeastRuntime>();
+#endif
             if (_instance != null)
             {
                 UnityEngine.Object.DontDestroyOnLoad(_instance.gameObject);
@@ -57,7 +61,11 @@ namespace Gamebeast.Internal
         {
             // MarkersService lives on the [Gamebeast] GameObject
             var markers = new MarkersService();
+            var configs = new ConfigsService();
             RegisterService<MarkersService>(markers);
+            RegisterService<ConfigsService>(configs);
+
+            configs.Setup(); // TODO: This is very manual, consider service auto-setup?
         }
 
         /// <summary>
