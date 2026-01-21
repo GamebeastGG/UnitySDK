@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using Gamebeast.Runtime.Internal.Services;
 using Gamebeast.Runtime.Internal.Utils;
+using Gamebeast.Runtime.Internal;
 
 namespace Gamebeast.Internal
 {
@@ -52,6 +53,9 @@ namespace Gamebeast.Internal
 
             // Register built-in services that should live on the [Gamebeast] object
             RegisterCoreServices();
+
+            var taskHandler = new TaskHandler();
+            taskHandler.StartHandler(); 
         }
 
         /// <summary>
@@ -62,8 +66,8 @@ namespace Gamebeast.Internal
             // MarkersService lives on the [Gamebeast] GameObject
             var markers = new MarkersService();
             var configs = new ConfigsService();
-            RegisterService<MarkersService>(markers);
-            RegisterService<ConfigsService>(configs);
+            RegisterService(markers);
+            RegisterService(configs);
 
             configs.Setup(); // TODO: This is very manual, consider service auto-setup?
         }

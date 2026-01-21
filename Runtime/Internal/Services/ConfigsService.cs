@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 using Gamebeast.Runtime.Internal.Utils;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Gamebeast.Runtime.Internal.Services
 {
@@ -21,6 +23,26 @@ namespace Gamebeast.Runtime.Internal.Services
         private static bool isReady = false;
         private static Dictionary<string, object> activeConfigs = new Dictionary<string, object>();
 
+        private Action onReady;
+
+        public event Action OnReady
+        {
+            add
+            {
+                if (isReady)
+                {
+                    value?.Invoke();
+                    return;
+                }
+
+                onReady += value;
+            }
+            remove
+            {
+                onReady -= value;
+            }
+        }
+
         private void FetchConfigs()
         {
             // Implementation to fetch configs from the server
@@ -36,6 +58,8 @@ namespace Gamebeast.Runtime.Internal.Services
 				activeConfigs = result.args.configs;
 				isReady = true;
 				Debug.Log("Configs fetched and ready.");
+                onReady?.Invoke();
+                onReady = null;
 			}
 			catch (Exception ex)
 			{
@@ -55,8 +79,41 @@ namespace Gamebeast.Runtime.Internal.Services
             {
                 try
                 {
-                    // Attempt to convert the object to the requested type
-                    return (TValue)Convert.ChangeType(value, typeof(TValue));
+                    if (value == null)
+                    {
+                        return default;
+                    }
+
+                    if (value is TValue typed)
+                    {
+                        return typed;
+                    }
+
+                    // Json.NET will often materialize Dictionary<string, object> values as JToken types.
+                    if (value is JToken token)
+                    {
+                        return token.ToObject<TValue>();
+                    }
+
+                    var targetType = typeof(TValue);
+                    if (targetType == typeof(string))
+                    {
+                        return (TValue)(object)value.ToString();
+                    }
+
+                    // Fast path for primitives + enums
+                    if (value is IConvertible)
+                    {
+                        if (targetType.IsEnum)
+                        {
+                            return (TValue)Enum.Parse(targetType, value.ToString(), ignoreCase: true);
+                        }
+
+                        return (TValue)Convert.ChangeType(value, targetType, CultureInfo.InvariantCulture);
+                    }
+
+                    // Complex types (objects/arrays): serialize then deserialize into requested type.
+                    return JsonConvert.DeserializeObject<TValue>(JsonConvert.SerializeObject(value));
                 }
                 catch (Exception ex)
                 {

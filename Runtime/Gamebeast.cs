@@ -12,5 +12,8 @@ namespace Gamebeast.Runtime
 
         public static IMarkersService Markers =>
             GamebeastRuntime.Instance.GetService<MarkersService>();
+
+        public static IConfigsService Configs =>
+            GamebeastRuntime.Instance.GetService<ConfigsService>();
     }
 }

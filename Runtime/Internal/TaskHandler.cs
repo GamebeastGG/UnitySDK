@@ -6,7 +6,7 @@ using Gamebeast.Runtime.Internal.Utils;
 
 namespace Gamebeast.Runtime.Internal
 {
-    internal class TaskHandler : MonoBehaviour
+    internal class TaskHandler
     {
         private float _timeSinceLastCheck = 0f;
         private const int CheckIntervalSeconds = 15;
@@ -20,7 +20,7 @@ namespace Gamebeast.Runtime.Internal
 			}
 			catch (Exception ex)
 			{
-				// TODO: implement retry logic
+				
 				Debug.LogError($"[TaskHandler] Error fetching requests: {ex}");
 			}
 		}
