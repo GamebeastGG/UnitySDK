@@ -25,39 +25,9 @@ namespace Gamebeast.Runtime.Internal.Services
 
         private static bool isReady = false;
         private static Dictionary<string, object> activeConfigs = new Dictionary<string, object>();
+        private Subscribeable<string> _onChanged = new Subscribeable<string>();
 
-		private readonly Dictionary<string, List<Action>> _changedHandlers = new Dictionary<string, List<Action>>();
-
-        private sealed class Subscription : IDisposable
-        {
-            private ConfigsService _service;
-            private readonly string _key;
-            private Action _callback;
-            private bool _disposed;
-
-            public Subscription(ConfigsService service, string key, Action callback)
-            {
-                _service = service;
-                _key = key;
-                _callback = callback;
-            }
-
-            public void Dispose()
-            {
-                if (_disposed) return;
-                _disposed = true;
-
-                var service = _service;
-                var callback = _callback;
-                _service = null;
-                _callback = null;
-
-                if (service == null || callback == null) return;
-                service.RemoveChangedHandler(_key, callback);
-            }
-        }
-
-        private Action onReady;
+        private Subscribeable<bool> _onReady = new Subscribeable<bool>();
 
         internal ConfigsService()
         {
@@ -68,22 +38,21 @@ namespace Gamebeast.Runtime.Internal.Services
             _instance = this;
         }
 
-        public event Action OnReady
+        public IDisposable OnReady(Action callback) 
         {
-            add
-            {
-                if (isReady)
-                {
-                    value?.Invoke();
-                    return;
-                }
 
-                onReady += value;
+            IDisposable subscription = null;
+            Action<bool> handler = (_) => {
+                callback();
+                subscription?.Dispose();
+            };
+
+            subscription = _onReady.Subscribe(handler);
+            if (isReady) {
+                handler(true);
             }
-            remove
-            {
-                onReady -= value;
-            }
+            
+            return subscription;
         }
 
         private void FetchConfigs()
@@ -105,8 +74,7 @@ namespace Gamebeast.Runtime.Internal.Services
                 activeConfigs = result.args.configs;
 				isReady = true;
 				Debug.Log("Configs fetched and ready.");
-                onReady?.Invoke();
-                onReady = null;
+                _onReady.Trigger(true);
 			}
 			catch (Exception ex)
 			{
@@ -127,25 +95,11 @@ namespace Gamebeast.Runtime.Internal.Services
                 return null;
             }
 
-            if (!_changedHandlers.TryGetValue(configName, out var list))
-            {
-                list = new List<Action>();
-                _changedHandlers[configName] = list;
-            }
-            list.Add(callback);
-            return new Subscription(this, configName, callback);
-        }
-
-        private void RemoveChangedHandler(string configName, Action callback)
-        {
-            if (string.IsNullOrWhiteSpace(configName) || callback == null) return;
-            if (!_changedHandlers.TryGetValue(configName, out var list) || list == null) return;
-
-            list.Remove(callback);
-            if (list.Count == 0)
-            {
-                _changedHandlers.Remove(configName);
-            }
+            return _onChanged.Subscribe((changedConfig) => {
+                if (configName == changedConfig) {
+                    callback();
+                }
+            });
         }
 
         internal void ApplyConfigs(IDictionary<string, JToken> configs)
@@ -156,7 +110,6 @@ namespace Gamebeast.Runtime.Internal.Services
                 return;
             }
 
-            List<Action> handlersSnapshot = null;
             foreach (var kvp in configs)
             {
                 var key = kvp.Key;
@@ -165,33 +118,18 @@ namespace Gamebeast.Runtime.Internal.Services
                 activeConfigs.TryGetValue(key, out var oldValue);
                 activeConfigs[key] = newValue;
 
-                // Only trigger if there are handlers for this key.
-                if (_changedHandlers.TryGetValue(key, out var handlers) && handlers.Count > 0)
+            
+                var changed = !JToken.DeepEquals(oldValue as JToken, newValue);
+                if (changed)
                 {
-                    // Optional: only fire when value actually changes.
-                    var changed = !JToken.DeepEquals(oldValue as JToken, newValue);
-                    if (changed)
-                    {
-                        handlersSnapshot ??= new List<Action>();
-                        handlersSnapshot.AddRange(handlers);
-                    }
+                    _onChanged.Trigger(key);
                 }
             }
 
             isReady = true;
             Debug.Log("[ConfigsService] Configs applied.");
-            onReady?.Invoke();
-            onReady = null;
+            _onReady.Trigger(true);
 
-            // Invoke after applying to avoid re-entrancy issues.
-            if (handlersSnapshot != null)
-            {
-                for (var i = 0; i < handlersSnapshot.Count; i++)
-                {
-                    try { handlersSnapshot[i]?.Invoke(); }
-                    catch (Exception ex) { Debug.LogError($"[ConfigsService] OnChanged callback threw: {ex}"); }
-                }
-            }
         }
 
         public TValue Get<TValue>(string configName)

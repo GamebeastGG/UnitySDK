@@ -12,7 +12,7 @@ namespace Gamebeast.Runtime.Internal
         private readonly Dictionary<string, Action<RemoteRequest>> _taskMap;
 
         private float _timeSinceLastCheck = 0f;
-        private const int CheckIntervalSeconds = 15;
+        private const int CheckIntervalSeconds = 5;
 
         internal TaskHandler()
         {

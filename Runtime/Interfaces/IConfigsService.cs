@@ -5,12 +5,12 @@ namespace Gamebeast.Runtime
 {
     public interface IConfigsService
     {
-        event Action OnReady;
 
         TValue Get<TValue>(string configName);
         bool IsReady();
 
         IDisposable OnChanged(string configName, Action callback);
+        IDisposable OnReady(Action callback);
 
     }
 }
