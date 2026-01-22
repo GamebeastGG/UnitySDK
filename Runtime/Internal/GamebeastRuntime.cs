@@ -13,6 +13,8 @@ namespace Gamebeast.Internal
     {
         private static GamebeastRuntime _instance;
         public static GamebeastRuntime Instance => EnsureInstance();
+
+        private static TaskHandler _taskHandler;
         
         // Registry for SDK services that live on the [Gamebeast] object
         private readonly Dictionary<Type, object> _services = new Dictionary<Type, object>();
@@ -54,8 +56,8 @@ namespace Gamebeast.Internal
             // Register built-in services that should live on the [Gamebeast] object
             RegisterCoreServices();
 
-            var taskHandler = new TaskHandler();
-            taskHandler.StartHandler(); 
+			_taskHandler = new TaskHandler();
+            _taskHandler.StartHandler(); 
         }
 
         /// <summary>
@@ -123,6 +125,8 @@ namespace Gamebeast.Internal
             {
                 markersService.Tick(Time.deltaTime);
             }
+
+            _taskHandler.Update();
 
         }
 

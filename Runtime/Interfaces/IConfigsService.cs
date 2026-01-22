@@ -9,5 +9,8 @@ namespace Gamebeast.Runtime
 
         TValue Get<TValue>(string configName);
         bool IsReady();
+
+        IDisposable OnChanged(string configName, Action callback);
+
     }
 }
