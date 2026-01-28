@@ -98,7 +98,8 @@ namespace Gamebeast.Runtime.Internal.Utils
 			{
 				request.downloadHandler = new DownloadHandlerBuffer();
 
-				if (method == UnityWebRequest.kHttpVerbPOST)
+				// Attach JSON body for any non-GET method (POST/PUT/etc).
+				if (method != UnityWebRequest.kHttpVerbGET)
 				{
 					// Use Newtonsoft.Json so we can correctly handle arbitrary object graphs and polymorphic 'value' fields.
 					string jsonBody;

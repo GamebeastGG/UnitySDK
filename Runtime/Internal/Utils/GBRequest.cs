@@ -12,9 +12,16 @@ namespace Gamebeast.Runtime.Internal.Utils
         GetRequest,
         StartRequest,
         CompleteRequest,
-        GetConfigs
+        GetConfigs,
 
         // add more as needed
+
+        //Plugin
+        GetHeatmaps,
+        CreateHeatmap,
+        UpdateHeatmap,
+        DeleteHeatmap,
+        UploadHeatmapImage
     }
 
     public enum GBRequestMethod
@@ -51,7 +58,15 @@ namespace Gamebeast.Runtime.Internal.Utils
             { GBRequestType.GetRequest, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbGET, Path = "/v1/requests" } },
             { GBRequestType.StartRequest, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPUT, Path = "/v1/requests/started" } },
             { GBRequestType.CompleteRequest, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/requests/completed" } },
-            { GBRequestType.GetConfigs, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbGET, Path = "/v1/configurations" } }
+            { GBRequestType.GetConfigs, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbGET, Path = "/v1/configurations" } },
+
+            // Plugin
+
+            { GBRequestType.GetHeatmaps, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbGET, Path = "/v1/heatmaps/list" } },
+            { GBRequestType.CreateHeatmap, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/heatmaps/create" } },
+            { GBRequestType.UpdateHeatmap, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPUT, Path = "/v1/heatmaps/{id}" } },
+            { GBRequestType.DeleteHeatmap, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbDELETE, Path = "/v1/heatmaps/{id}" } },
+            { GBRequestType.UploadHeatmapImage, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/heatmaps/uploadimage" } }, // TODO: cant go here because content type isnt json
         };
 
         public static void SetApiKey(string apiKey)
@@ -59,7 +74,10 @@ namespace Gamebeast.Runtime.Internal.Utils
             _apiKey = apiKey;
         }
 
-        public static Task<TResponse> MakeRequestAsync<TResponse>(GBRequestType requestType, object body = null)
+        public static Task<TResponse> MakeRequestAsync<TResponse>(
+            GBRequestType requestType,
+            object body = null,
+            Dictionary<string, string> urlParams = null)
         {
             if (string.IsNullOrEmpty(_apiKey))
             {
@@ -83,6 +101,8 @@ namespace Gamebeast.Runtime.Internal.Utils
             var path = GBRequestTypeMap[requestType].Path;
             var method = GBRequestTypeMap[requestType].Method;
 
+            path = ApplyUrlParams(path, urlParams);
+
             switch (method)
             {
                 case UnityWebRequest.kHttpVerbGET:
@@ -90,6 +110,23 @@ namespace Gamebeast.Runtime.Internal.Utils
                 default:
                     return Requester.PostAsync<TResponse>("/sdk" + path, body, headers, method);
             }
+        }
+
+        private static string ApplyUrlParams(string path, Dictionary<string, string> urlParams)
+        {
+            if (string.IsNullOrEmpty(path) || urlParams == null || urlParams.Count == 0) return path;
+
+            foreach (var kv in urlParams)
+            {
+                var key = kv.Key;
+                var value = kv.Value ?? string.Empty;
+                var encoded = Uri.EscapeDataString(value);
+                path = path
+                    .Replace("{" + key + "}", encoded)
+                    .Replace(":" + key, encoded);
+            }
+
+            return path;
         }
     }
 }
