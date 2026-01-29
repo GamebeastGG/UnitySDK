@@ -1,11 +1,11 @@
 #if UNITY_EDITOR
-using System.IO;
 using UnityEditor;
 using UnityEngine;
 using Gamebeast.Runtime.Internal.Utils;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 using System.Linq;
+using System;
 
 namespace Gamebeast.Editor
 {
@@ -47,6 +47,8 @@ namespace Gamebeast.Editor
         private const int MaxOutputDimension = 512;
 
 		private Texture2D _previewTexture;
+        private float _previewResolutionFactor = 1.0f;
+        private byte[] _previewPngBytes;
 		private Vector2 _previewScroll;
         private string _currentKey = "";
         private string _nameField = "";
@@ -305,6 +307,7 @@ namespace Gamebeast.Editor
 
             var computed = ComputeOutputSize();
             EditorGUILayout.LabelField("Computed Size", computed.HasValue ? $"{computed.Value.x} x {computed.Value.y}" : "—");
+            EditorGUILayout.LabelField("Resolution Factor", $"{_selectedHeatmap.resolutionFactor:0.####} units/px");
 
             using (new EditorGUI.DisabledScope(_cornerA == null || _cornerB == null))
             {
@@ -314,10 +317,12 @@ namespace Gamebeast.Editor
                     {
                         RenderPreview();
                     }
-
-                    if (GUILayout.Button("Save PNG…", GUILayout.Height(30), GUILayout.Width(120)))
+                    using (new EditorGUI.DisabledScope(_previewTexture == null))
                     {
-                        SavePng();
+                        if (GUILayout.Button("Upload PNG", GUILayout.Height(30)))
+                        {
+                            UploadPng();
+                        }
                     }
                 }
             }
@@ -366,8 +371,12 @@ namespace Gamebeast.Editor
                     _previewTexture = null;
                 }
 
-                _previewTexture = OverheadPngRenderer.RenderToTexture2D(_cornerA.position, _cornerB.position, options);
+                var result = OverheadPngRenderer.RenderToTexture2DWithResult(_cornerA.position, _cornerB.position, options);
+                _previewTexture = result.Texture;
                 _previewTexture.filterMode = FilterMode.Point;
+
+                _previewResolutionFactor = Math.Max(1.0f, result.ResolutionFactor);
+                _previewPngBytes = _previewTexture.EncodeToPNG();
                 _statusMessage = $"Preview rendered ({width} x {height}).";
             }
             catch (System.Exception ex)
@@ -379,49 +388,99 @@ namespace Gamebeast.Editor
             Repaint();
         }
 
-        private void SavePng()
+        // Use this when you're ready to upload the latest rendered preview.
+        private byte[] GetPreviewPngBytes()
         {
-            if (_previewTexture == null)
+            if (_previewTexture == null) return null;
+            if (_previewPngBytes == null || _previewPngBytes.Length == 0)
             {
-                // No preview yet: render one first, then user can save.
-                RenderPreview();
-                if (_previewTexture == null) return;
+                _previewPngBytes = _previewTexture.EncodeToPNG();
             }
+            return _previewPngBytes;
+        }
 
-            var assetPath = EditorUtility.SaveFilePanelInProject(
-                "Save Overhead PNG",
-                "overhead",
-                "png",
-                "Choose where to save the overhead PNG.");
-            if (string.IsNullOrEmpty(assetPath))
+        private static bool IsPngBytes(byte[] bytes)
+        {
+            // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+            if (bytes == null || bytes.Length < 8) return false;
+            return bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47 &&
+                   bytes[4] == 0x0D && bytes[5] == 0x0A && bytes[6] == 0x1A && bytes[7] == 0x0A;
+        }
+
+        private async void UploadPng()
+        {
+            var pngBytes = GetPreviewPngBytes();
+            if (!IsPngBytes(pngBytes))
             {
-                _statusMessage = "Save cancelled.";
+                _statusMessage = "Upload aborted: preview bytes are not PNG.";
+                Debug.LogError("[Gamebeast Heatmaps] Upload aborted: preview bytes are not a valid PNG signature.");
+                Repaint();
                 return;
             }
 
-            var projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
-            if (string.IsNullOrEmpty(projectRoot))
-            {
-                _statusMessage = "Could not resolve project root.";
-                return;
-            }
-
-            var absolutePath = Path.Combine(projectRoot, assetPath);
             try
-            {
-                var png = _previewTexture.EncodeToPNG();
-                Directory.CreateDirectory(Path.GetDirectoryName(absolutePath) ?? projectRoot);
-                File.WriteAllBytes(absolutePath, png);
-                AssetDatabase.Refresh();
-                _statusMessage = $"Saved: {assetPath}";
+			{        
+                var toSave = new HeatmapDetails
+                {
+                    name = _selectedHeatmap.name,
+                    description = _selectedHeatmap.description,
+                    bounds = new HeatmapBounds
+                    {
+                        pointA = new Point{ x = _selectedHeatmap.bounds.pointA.x, y = _selectedHeatmap.bounds.pointA.y, z = _selectedHeatmap.bounds.pointA.z },
+                        pointB = new Point{ x = _selectedHeatmap.bounds.pointB.x, y = _selectedHeatmap.bounds.pointB.y, z = _selectedHeatmap.bounds.pointB.z },
+                    },
+                    resolutionFactor = Math.Max(1.0f, _previewResolutionFactor)
+                };
+
+                Debug.Log("Updating resolution factor to " + toSave.resolutionFactor);
+
+                var updateResult = await GBRequest.MakeRequestAsync<string>(
+                    GBRequestType.UpdateHeatmap,
+                    toSave,
+                    urlParams: new Dictionary<string, string> { { "id", _selectedHeatmap.id } });
+
+                Debug.Log("[Gamebeast Heatmaps] Updated heatmap resolution factor successfully.");
+                Debug.Log(updateResult);
+
+                _selectedHeatmap.resolutionFactor = _previewResolutionFactor;
+                SelectHeatmap(_selectedHeatmap.id);
+
+                try
+                {
+                    var uploadResult = await Requester.PostAsync<string>(
+                        $"/sdk/v1/heatmaps/{_selectedHeatmap.id}/image",
+                        body: pngBytes,
+                        headers: new Dictionary<string, string>
+                        {
+                            { "content-type", "image/png" },
+                            { "authorization", _currentKey }
+                        }
+                    );
+
+                    _statusMessage = "Uploaded heatmap image successfully.";
+                    Debug.Log("[Gamebeast Heatmaps] Uploaded heatmap image successfully.");
+                    Debug.Log(uploadResult);
+
+                    if (true) {
+                        return;
+                    }
+
+                    
+                }
+                catch (Exception ex)
+                {
+                    _statusMessage = "Upload failed. See Console.";
+                    Debug.LogError($"[Gamebeast Heatmaps] Upload failed: {ex}");
+                }
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
-                _statusMessage = "Save failed. See Console.";
-                Debug.LogError($"[Gamebeast Heatmaps] Save failed: {ex}");
+                Debug.LogError($"[Gamebeast Heatmaps] Update resolution factor failed: {ex}");
             }
 
-            Repaint();
+			
+
+			Repaint();
         }
 
         private void OnDisable()
@@ -431,6 +490,8 @@ namespace Gamebeast.Editor
                 DestroyImmediate(_previewTexture);
                 _previewTexture = null;
             }
+
+			_previewPngBytes = null;
         }
 
         private Vector2Int? ComputeOutputSize()

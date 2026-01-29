@@ -1,13 +1,18 @@
 #if UNITY_EDITOR
 using System;
-using System.IO;
-using UnityEditor;
 using UnityEngine;
 
 namespace Gamebeast.Editor
 {
     internal static class OverheadPngRenderer
     {
+        internal sealed class RenderResult
+        {
+            public Texture2D Texture;
+            // World-units per pixel in the output image.
+            public float ResolutionFactor;
+        }
+
         internal sealed class Options
         {
             public int Width = 2048;
@@ -29,12 +34,24 @@ namespace Gamebeast.Editor
         /// </summary>
         internal static Texture2D RenderToTexture2D(Vector3 cornerA, Vector3 cornerB, Options options = null)
         {
+            var result = RenderToTexture2DWithResult(cornerA, cornerB, options);
+            return result.Texture;
+        }
+
+        /// <summary>
+        /// Same as <see cref="RenderToTexture2D"/>, but also returns the resolution factor (world-units per pixel).
+        /// </summary>
+        internal static RenderResult RenderToTexture2DWithResult(Vector3 cornerA, Vector3 cornerB, Options options = null)
+        {
             options ??= new Options();
 
             var minX = Mathf.Min(cornerA.x, cornerB.x) - options.PaddingWorld;
             var maxX = Mathf.Max(cornerA.x, cornerB.x) + options.PaddingWorld;
             var minZ = Mathf.Min(cornerA.z, cornerB.z) - options.PaddingWorld;
             var maxZ = Mathf.Max(cornerA.z, cornerB.z) + options.PaddingWorld;
+
+            var width = Mathf.Max(1, options.Width);
+            var height = Mathf.Max(1, options.Height);
 
             var centerX = (minX + maxX) * 0.5f;
             var centerZ = (minZ + maxZ) * 0.5f;
@@ -47,16 +64,17 @@ namespace Gamebeast.Editor
                 TryComputeYExtentsFromRenderers(minX, maxX, minZ, maxZ, ref yMin, ref yMax);
             }
 
-            var width = Mathf.Max(1, options.Width);
-            var height = Mathf.Max(1, options.Height);
             var aspect = width / (float)height;
-
             var halfX = (maxX - minX) * 0.5f;
             var halfZ = (maxZ - minZ) * 0.5f;
 
             // Camera looks down -Y; screen horizontal maps to +X, vertical maps to +Z.
             // orthographicSize is half of the vertical world size.
             var orthoSize = Mathf.Max(halfZ, halfX / aspect);
+
+            // Final world-units per pixel in the output image.
+            // (Vertical world coverage is 2*orthoSize, spanning 'height' pixels.)
+            var resolutionFactor = (2f * orthoSize) / height;
 
             var cameraY = yMax + Mathf.Max(1f, options.HeightMargin);
             var farClip = Mathf.Max(1f, cameraY - yMin + Mathf.Max(1f, options.HeightMargin));
@@ -91,7 +109,6 @@ namespace Gamebeast.Editor
                 };
 
                 cam.targetTexture = rt;
-
                 cam.Render();
 
                 prevActive = RenderTexture.active;
@@ -107,7 +124,11 @@ namespace Gamebeast.Editor
                 rt.Release();
                 UnityEngine.Object.DestroyImmediate(rt);
 
-				return tex;
+                return new RenderResult
+                {
+                    Texture = tex,
+                    ResolutionFactor = resolutionFactor,
+                };
             }
             finally
             {
@@ -120,38 +141,6 @@ namespace Gamebeast.Editor
                 {
                     UnityEngine.Object.DestroyImmediate(cameraGo);
                 }
-            }
-        }
-
-        /// <summary>
-        /// Renders a top-down orthographic PNG covering the XZ rectangle defined by cornerA/cornerB.
-        /// Y is only used for clipping; the image coverage is in XZ.
-        /// </summary>
-        internal static void RenderToPng(Vector3 cornerA, Vector3 cornerB, string outputPath, Options options = null)
-        {
-            if (string.IsNullOrWhiteSpace(outputPath)) throw new ArgumentException("outputPath is required", nameof(outputPath));
-            options ??= new Options();
-
-            var directory = Path.GetDirectoryName(outputPath);
-            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-
-            var tex = RenderToTexture2D(cornerA, cornerB, options);
-            try
-            {
-                var png = tex.EncodeToPNG();
-                File.WriteAllBytes(outputPath, png);
-            }
-            finally
-            {
-                if (tex != null)
-                {
-                    UnityEngine.Object.DestroyImmediate(tex);
-                }
-            }
-
-            if (IsInsideAssetsFolder(outputPath))
-            {
-                AssetDatabase.Refresh();
             }
         }
 
@@ -192,12 +181,6 @@ namespace Gamebeast.Editor
             }
         }
 
-        private static bool IsInsideAssetsFolder(string absolutePath)
-        {
-            var assetsPath = Application.dataPath.Replace('\\', '/');
-            var path = absolutePath.Replace('\\', '/');
-            return path.StartsWith(assetsPath, StringComparison.OrdinalIgnoreCase);
-        }
     }
 }
 #endif

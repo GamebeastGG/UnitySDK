@@ -101,23 +101,36 @@ namespace Gamebeast.Runtime.Internal.Utils
 				// Attach JSON body for any non-GET method (POST/PUT/etc).
 				if (method != UnityWebRequest.kHttpVerbGET)
 				{
-					// Use Newtonsoft.Json so we can correctly handle arbitrary object graphs and polymorphic 'value' fields.
-					string jsonBody;
-					if (body == null)
+					// If the caller provides raw bytes (e.g., image/png), send them as-is.
+					// Otherwise, serialize to JSON.
+					if (body is byte[] rawBytes)
 					{
-						jsonBody = "{}";
-						//Debug.Log("[Requester] POST body is null, sending empty JSON object {}");
+						request.uploadHandler = new UploadHandlerRaw(rawBytes);
+						// Default content-type for raw bytes; caller can override via headers.
+						request.SetRequestHeader("Content-Type", "application/octet-stream");
 					}
 					else
 					{
-						jsonBody = JsonConvert.SerializeObject(body);
+						// Use Newtonsoft.Json so we can correctly handle arbitrary object graphs and polymorphic 'value' fields.
+						string jsonBody;
+						if (body == null)
+						{
+							jsonBody = "{}";
+							//Debug.Log("[Requester] POST body is null, sending empty JSON object {} ");
+						}
+						else
+						{
+							jsonBody = JsonConvert.SerializeObject(body);
+						}
+
+						//Debug.Log($"[Requester] POST {url} with body: {jsonBody} and {(body != null ? body.GetType().Name : "<null>")}");
+
+
+						Debug.Log("[Requester] POST body: " + jsonBody);
+						byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
+						request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+						request.SetRequestHeader("Content-Type", "application/json");
 					}
-
-					//Debug.Log($"[Requester] POST {url} with body: {jsonBody} and {(body != null ? body.GetType().Name : "<null>")}");
-
-					byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
-					request.uploadHandler = new UploadHandlerRaw(bodyRaw);
-					request.SetRequestHeader("Content-Type", "application/json");
 				}
 
                 // Apply headers
@@ -154,6 +167,8 @@ namespace Gamebeast.Runtime.Internal.Utils
 
 		private static Task SendWebRequestAsync(UnityWebRequest request)
 		{
+			Debug.Log("[Requester] Sending web request to " + request.url);
+
 			var operation = request.SendWebRequest();
 			var tcs = new TaskCompletionSource<object>();
 			operation.completed += _ => tcs.TrySetResult(null);

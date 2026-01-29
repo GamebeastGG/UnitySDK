@@ -2,17 +2,10 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Gamebeast.Runtime.Internal.Utils;
+using UnityEngine.UIElements;
 
 namespace Gamebeast.Runtime.Internal.Services
 {
-    [Serializable]
-    public class MarkerProperties
-    {
-        public string sdkPlatform;
-        public int placeId;
-        public int placeVersion;
-        public string origin;
-    }
 
     [Serializable]
     public class MarkerPayload
@@ -21,8 +14,8 @@ namespace Gamebeast.Runtime.Internal.Services
         public long timestamp;
         public string type;
         public string serverId;
-        public object value;
-        public MarkerProperties properties;
+        public string userId;
+        public object properties;
     }
 
     [Serializable]
@@ -38,6 +31,7 @@ namespace Gamebeast.Runtime.Internal.Services
 
         private float _timeSinceLastFlush = 0f;
         private const int FlushIntervalSeconds = 10;
+
 
         private void FlushMarkers()
         {
@@ -79,7 +73,7 @@ namespace Gamebeast.Runtime.Internal.Services
             return type.IsPrimitive || type == typeof(string) || type == typeof(decimal);
         }
 
-        private void GenerateMarkerPayload<TValue>(string markerName, TValue value)
+        private void GenerateMarkerPayload<TValue>(string markerName, TValue value, string distinctId = null)
         {
             // Enforce that only object-like payloads are allowed (no primitives/strings).
             if (value != null && IsPrimitiveLike(typeof(TValue)))
@@ -88,20 +82,29 @@ namespace Gamebeast.Runtime.Internal.Services
                 return;
             }
 
+            // Detect Vector3 types in the value then convert to a float array.
+            if (value is object obj)
+            {
+                var objType = obj.GetType();
+                var fields = objType.GetFields();
+                foreach (var field in fields)
+                {
+                    if (field.FieldType == typeof(Vector3))
+                    {
+                        var vec = (Vector3)field.GetValue(obj);
+                        field.SetValue(obj, new float[] { vec.x, vec.y, vec.z });
+                    }
+                }
+            }
+
             var marker = new MarkerPayload
             {
                 markerId = Guid.NewGuid().ToString("N"),
                 timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                type = markerName,
+                type = markerName, // eventName
                 serverId = "unity-0000",
-                value = value,
-                properties = new MarkerProperties
-                {
-                    sdkPlatform = "roblox",
-                    placeId = 1,
-                    placeVersion = 1,
-                    origin = "sdk"
-                }
+                userId = distinctId, // distinctId
+                properties = value
             };
 
             var shouldFlush = false;
@@ -128,7 +131,24 @@ namespace Gamebeast.Runtime.Internal.Services
                 return;
             }
 
-            GenerateMarkerPayload(markerName, value);
+            GenerateMarkerPayload(markerName, value, null);
+        }
+
+        public void SendPlayerMarker<TValue>(string userId, string markerName, TValue value)
+        {
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                Debug.LogError("[MarkersService] userId missing, will not send.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(markerName))
+            {
+                Debug.LogError("[MarkersService] markerName missing, will not send.");
+                return;
+            }
+
+            GenerateMarkerPayload(markerName, value, userId);
         }
 
         /// <summary>

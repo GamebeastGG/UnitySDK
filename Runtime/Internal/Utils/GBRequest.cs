@@ -20,9 +20,8 @@ namespace Gamebeast.Runtime.Internal.Utils
         GetHeatmaps,
         CreateHeatmap,
         UpdateHeatmap,
-        DeleteHeatmap,
-        UploadHeatmapImage
-    }
+        DeleteHeatmap
+        }
 
     public enum GBRequestMethod
     {
@@ -66,7 +65,6 @@ namespace Gamebeast.Runtime.Internal.Utils
             { GBRequestType.CreateHeatmap, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/heatmaps/create" } },
             { GBRequestType.UpdateHeatmap, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPUT, Path = "/v1/heatmaps/{id}" } },
             { GBRequestType.DeleteHeatmap, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbDELETE, Path = "/v1/heatmaps/{id}" } },
-            { GBRequestType.UploadHeatmapImage, new GBRequestInfo { Method = UnityWebRequest.kHttpVerbPOST, Path = "/v1/heatmaps/uploadimage" } }, // TODO: cant go here because content type isnt json
         };
 
         public static void SetApiKey(string apiKey)
