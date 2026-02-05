@@ -134,7 +134,7 @@ namespace Gamebeast.Runtime.Internal.Services
             GenerateMarkerPayload(markerName, value, null);
         }
 
-        public void SendPlayerMarker<TValue>(string userId, string markerName, TValue value)
+        public void SendUserMarker<TValue>(string userId, string markerName, TValue value)
         {
             if (string.IsNullOrWhiteSpace(userId))
             {
