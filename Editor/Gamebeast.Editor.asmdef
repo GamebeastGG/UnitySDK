@@ -1,8 +1,12 @@
 {
-	"name": "Gamebeast.Runtime",
-	"rootNamespace": "Gamebeast",
-	"references": [],
-	"includePlatforms": [],
+	"name": "Gamebeast.Editor",
+	"rootNamespace": "Gamebeast.Editor",
+	"references": [
+		"Gamebeast.Runtime"
+	],
+	"includePlatforms": [
+		"Editor"
+	],
 	"excludePlatforms": [],
 	"allowUnsafeCode": false,
 	"overrideReferences": false,

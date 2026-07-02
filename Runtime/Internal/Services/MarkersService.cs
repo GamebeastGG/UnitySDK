@@ -1,184 +1,140 @@
 using System;
 using System.Collections.Generic;
-using UnityEngine;
-using Gamebeast.Runtime.Internal.Utils;
-using UnityEngine.UIElements;
+using Gamebeast.Internal.Models;
 
-namespace Gamebeast.Runtime.Internal.Services
+namespace Gamebeast.Internal.Services
 {
-
-    [Serializable]
-    public class MarkerPayload
+    /// <summary>
+    /// Batches engagement markers and posts them to /sdk/v1/markers.
+    /// Flushes when the batch is full, every few seconds, and when the app
+    /// quits or is backgrounded.
+    /// </summary>
+    internal sealed class MarkersService : IMarkersService, IGamebeastService
     {
-        public string markerId;
-        public long timestamp;
-        public string type;
-        public string serverId;
-        public string userId;
-        public object properties;
-    }
+        private const int MaxBatchSize = 10;
+        private const float FlushIntervalSeconds = 10f;
 
-    [Serializable]
-    public class MarkersWrapper
-    {
-        public MarkerPayload[] markers;
-    }
-    
-    internal sealed class MarkersService : IMarkersService
-    {
-        private static readonly List<MarkerPayload> _markerCache = new List<MarkerPayload>();
-        private static readonly object _markerCacheLock = new object();
+        private readonly List<MarkerPayload> _pending = new List<MarkerPayload>();
+        private readonly object _pendingLock = new object();
 
-        private float _timeSinceLastFlush = 0f;
-        private const int FlushIntervalSeconds = 10;
+        private GamebeastContext _context;
+        private float _timeSinceLastFlush;
 
-
-        private void FlushMarkers()
+        public void Initialize(GamebeastContext context)
         {
-            MarkerPayload[] snapshot;
-
-            _timeSinceLastFlush = 0f;
-
-            lock (_markerCacheLock)
-            {
-                if (_markerCache.Count == 0) return;
-
-                snapshot = _markerCache.ToArray();
-                _markerCache.Clear();
-            }
-
-            var wrapper = new MarkersWrapper
-            {
-                markers = snapshot
-            };
-
-			SendMarkersAsync(wrapper);
+            _context = context;
         }
 
-		private async void SendMarkersAsync(MarkersWrapper wrapper)
-		{
-			try
-			{
-				await GBRequest.MakeRequestAsync<string>(GBRequestType.PostMarker, wrapper);
-				Debug.Log("[MarkersService] Successfully sent markers.");
-			}
-			catch (Exception ex)
-			{
-				// TODO: implement retry logic
-				Debug.LogError($"[MarkersService] Error sending markers: {ex}");
-			}
-		}
-        private static bool IsPrimitiveLike(Type type)
+        public void SendMarker(string markerType, object value = null)
         {
-            return type.IsPrimitive || type == typeof(string) || type == typeof(decimal);
-        }
-
-        private void GenerateMarkerPayload<TValue>(string markerName, TValue value, string distinctId = null)
-        {
-            // Enforce that only object-like payloads are allowed (no primitives/strings).
-            if (value != null && IsPrimitiveLike(typeof(TValue)))
+            if (string.IsNullOrWhiteSpace(markerType))
             {
-                Debug.LogError($"[MarkersService] TValue '{typeof(TValue).Name}' is a primitive; markers must use object-like payload types.");
+                GBLog.Error("SendMarker called without a markerType; marker dropped.");
                 return;
             }
 
-            // Detect Vector3 types in the value then convert to a float array.
-            if (value is object obj)
+            if (value != null && IsPrimitiveLike(value.GetType()))
             {
-                var objType = obj.GetType();
-                var fields = objType.GetFields();
-                foreach (var field in fields)
-                {
-                    if (field.FieldType == typeof(Vector3))
-                    {
-                        var vec = (Vector3)field.GetValue(obj);
-                        field.SetValue(obj, new float[] { vec.x, vec.y, vec.z });
-                    }
-                }
+                GBLog.Error($"Marker '{markerType}' has a bare {value.GetType().Name} payload; " +
+                            "markers must use object-like payloads (anonymous type, POCO, or dictionary).");
+                return;
             }
 
             var marker = new MarkerPayload
             {
-                markerId = Guid.NewGuid().ToString("N"),
-                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                type = markerName, // eventName
-                serverId = "unity-0000",
-                userId = distinctId, // distinctId
-                properties = value
+                MarkerId = Guid.NewGuid().ToString("N"),
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                EventName = markerType,
+                SessionId = _context.SessionId,
+                DistinctId = _context.Identity.DistinctId,
+                Properties = value,
             };
 
-            var shouldFlush = false;
-            lock (_markerCacheLock)
+            bool shouldFlush;
+            lock (_pendingLock)
             {
-                _markerCache.Add(marker);
-
-                if (_markerCache.Count >= 10)
-                {
-                    shouldFlush = true;
-                }
+                _pending.Add(marker);
+                shouldFlush = _pending.Count >= MaxBatchSize;
             }
 
             if (shouldFlush)
             {
-                FlushMarkers();
+                Flush();
             }
         }
-        public void SendMarker<TValue>(string markerName, TValue value)
-        {
-            if (string.IsNullOrWhiteSpace(markerName))
-            {
-                Debug.LogError("[MarkersService] markerName missing, will not send.");
-                return;
-            }
 
-            GenerateMarkerPayload(markerName, value, null);
+        private static bool IsPrimitiveLike(Type type)
+        {
+            return type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(decimal);
         }
 
-        public void SendUserMarker<TValue>(string userId, string markerName, TValue value)
+        private void Flush()
         {
-            if (string.IsNullOrWhiteSpace(userId))
+            MarkerBatch batch;
+            _timeSinceLastFlush = 0f;
+
+            lock (_pendingLock)
             {
-                Debug.LogError("[MarkersService] userId missing, will not send.");
-                return;
+                if (_pending.Count == 0) return;
+
+                batch = new MarkerBatch { Markers = new List<MarkerPayload>(_pending) };
+                _pending.Clear();
             }
 
-            if (string.IsNullOrWhiteSpace(markerName))
-            {
-                Debug.LogError("[MarkersService] markerName missing, will not send.");
-                return;
-            }
-
-            GenerateMarkerPayload(markerName, value, userId);
+            SendBatchAsync(batch);
         }
 
-        /// <summary>
-        /// Called regularly (e.g. from GamebeastRuntime.Update) to handle time-based flushing.
-        /// </summary>
-        internal void Tick(float deltaTime)
+        private async void SendBatchAsync(MarkerBatch batch)
         {
-            var shouldFlush = false;
-            lock (_markerCacheLock) {
-                if (_markerCache.Count == 0)
+            try
+            {
+                var response = await _context.Api.PostMarkersAsync(batch);
+                if (response.IsSuccess)
+                {
+                    GBLog.Info($"Sent {batch.Markers.Count} marker(s).");
+                }
+                else
+                {
+                    // TODO: retry/persist failed batches (parity with Roblox OnMarkersFailed).
+                    GBLog.Error($"Failed to send {batch.Markers.Count} marker(s): {response.Describe()}");
+                }
+            }
+            catch (Exception ex)
+            {
+                GBLog.Error($"Error sending markers: {ex}");
+            }
+        }
+
+        public void Tick(float deltaTime)
+        {
+            lock (_pendingLock)
+            {
+                if (_pending.Count == 0)
                 {
                     _timeSinceLastFlush = 0f;
                     return;
                 }
-                _timeSinceLastFlush += deltaTime;
-
-                if (_timeSinceLastFlush >= FlushIntervalSeconds)
-                {
-                    shouldFlush = true;
-                }
             }
-            
-            if (shouldFlush == true) {
-                FlushMarkers();
+
+            _timeSinceLastFlush += deltaTime;
+            if (_timeSinceLastFlush >= FlushIntervalSeconds)
+            {
+                Flush();
             }
         }
 
-        internal void Cleanup()
+        public void OnApplicationPause(bool paused)
         {
-            FlushMarkers();
+            // Backgrounded apps can be killed without OnApplicationQuit; flush now.
+            if (paused)
+            {
+                Flush();
+            }
+        }
+
+        public void Shutdown()
+        {
+            Flush();
         }
     }
 }

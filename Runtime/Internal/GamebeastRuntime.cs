@@ -1,141 +1,178 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using Gamebeast.Runtime.Internal.Services;
-using Gamebeast.Runtime.Internal.Utils;
-using Gamebeast.Runtime.Internal;
+using Gamebeast.Internal.Http;
+using Gamebeast.Internal.Services;
 
 namespace Gamebeast.Internal
 {
-    // Internal: only code inside the Gamebeast assembly can see this by default.
-    
-    internal class GamebeastRuntime : MonoBehaviour
+    /// <summary>
+    /// Hidden MonoBehaviour host for the SDK. Owns the service registry and drives
+    /// service lifecycles (Initialize / Tick / OnApplicationPause / Shutdown) from
+    /// Unity's player loop. Lives on a DontDestroyOnLoad "[Gamebeast]" GameObject.
+    /// </summary>
+    internal sealed class GamebeastRuntime : MonoBehaviour
     {
         private static GamebeastRuntime _instance;
+
         public static GamebeastRuntime Instance => EnsureInstance();
 
-        private static TaskHandler _taskHandler;
-        
-        // Registry for SDK services that live on the [Gamebeast] object
-        private readonly Dictionary<Type, object> _services = new Dictionary<Type, object>();
+        public static bool IsInitialized => _instance != null && _instance._initialized;
+
+        // Keyed by public interface type (e.g. IMarkersService). Iterated in
+        // registration order for Initialize/Tick/Shutdown.
+        private readonly Dictionary<Type, IGamebeastService> _services = new Dictionary<Type, IGamebeastService>();
+        private readonly List<IGamebeastService> _serviceOrder = new List<IGamebeastService>();
+
+        private bool _initialized;
+
+        public GamebeastContext Context { get; private set; }
+
         private static GamebeastRuntime EnsureInstance()
         {
             if (_instance != null) return _instance;
 
-            // Try to find an existing instance (in case user dropped a prefab)
+            // Reuse an existing instance in case one was placed in the scene.
 #if UNITY_2022_2_OR_NEWER
-            _instance = UnityEngine.Object.FindFirstObjectByType<GamebeastRuntime>();
+            _instance = FindFirstObjectByType<GamebeastRuntime>();
 #else
-            _instance = UnityEngine.Object.FindObjectOfType<GamebeastRuntime>();
+            _instance = FindObjectOfType<GamebeastRuntime>();
 #endif
-            if (_instance != null)
+            if (_instance == null)
             {
-                UnityEngine.Object.DontDestroyOnLoad(_instance.gameObject);
-                return _instance;
+                var go = new GameObject("[Gamebeast]");
+                _instance = go.AddComponent<GamebeastRuntime>();
             }
 
-            // Otherwise create a hidden GameObject for it
-            var go = new GameObject("[Gamebeast]");
-            _instance = go.AddComponent<GamebeastRuntime>();
-            UnityEngine.Object.DontDestroyOnLoad(go);
+            DontDestroyOnLoad(_instance.gameObject);
             return _instance;
         }
 
-        private bool _initialized;
-        private string _apiKey;
-
-        public void Init(string apiKey)
+        public void Setup(GamebeastSettings settings)
         {
-            if (_initialized) return;
-
-            _apiKey = apiKey;
-            _initialized = true;
-
-            GBRequest.SetApiKey(_apiKey);
-
-            // Register built-in services that should live on the [Gamebeast] object
-            RegisterCoreServices();
-
-			_taskHandler = new TaskHandler();
-            _taskHandler.StartHandler(); 
-        }
-
-        /// <summary>
-        /// Register all core Gamebeast services that should live on the [Gamebeast] GameObject.
-        /// </summary>
-        private void RegisterCoreServices()
-        {
-            // MarkersService lives on the [Gamebeast] GameObject
-            var markers = new MarkersService();
-            var configs = new ConfigsService();
-            RegisterService(markers);
-            RegisterService(configs);
-
-            configs.Setup(); // TODO: This is very manual, consider service auto-setup?
-        }
-
-        /// <summary>
-        /// Registers a service instance so it can be resolved via GetService&lt;T&gt;().
-        /// </summary>
-        internal void RegisterService<TService>(TService instance) where TService : class
-        {
-            if (instance == null)
+            if (_initialized)
             {
-                Debug.LogError($"[Gamebeast] Tried to register null service of type {typeof(TService).Name}.");
+                GBLog.Warn("Setup called more than once; ignoring.");
                 return;
             }
 
-            var type = typeof(TService);
+            if (settings == null || string.IsNullOrWhiteSpace(settings.ApiKey))
+            {
+                GBLog.Error("Setup requires a non-empty ApiKey.");
+                return;
+            }
+
+            GBLog.DebugEnabled = settings.DebugLogging;
+
+            var environmentAlias = ResolveEnvironmentAlias(settings.Environment);
+            var identity = DistinctIdentity.Resolve(settings.DistinctId);
+            var sessionId = "unity-" + Guid.NewGuid().ToString("N");
+            var api = new GamebeastApiClient(settings, environmentAlias, sessionId);
+
+            Context = new GamebeastContext(settings, identity, api, environmentAlias, sessionId);
+
+            RegisterService<IMarkersService>(new MarkersService());
+            RegisterService<IConfigsService>(new ConfigsService());
+
+            _initialized = true;
+
+            foreach (var service in _serviceOrder)
+            {
+                try
+                {
+                    service.Initialize(Context);
+                }
+                catch (Exception ex)
+                {
+                    GBLog.Error($"Failed to initialize {service.GetType().Name}: {ex}");
+                }
+            }
+
+            GBLog.Info($"SDK initialized (environment: {environmentAlias}, distinctId: {identity.DistinctId}).");
+        }
+
+        private void RegisterService<TInterface>(IGamebeastService instance) where TInterface : class
+        {
+            var type = typeof(TInterface);
             if (_services.ContainsKey(type))
             {
-                Debug.LogWarning($"[Gamebeast] Service of type {type.Name} is already registered. Overwriting.");
+                GBLog.Warn($"Service {type.Name} is already registered; overwriting.");
             }
 
             _services[type] = instance;
+            _serviceOrder.Add(instance);
         }
 
         /// <summary>
-        /// Get a registered service of type TService. Returns null if not found or if SDK not initialized.
+        /// Resolve a service by its public interface. Returns null (with a warning)
+        /// before Setup or for unknown types.
         /// </summary>
-        internal TService GetService<TService>() where TService : class
+        public TService GetService<TService>() where TService : class
         {
             if (!_initialized)
             {
-                Debug.LogWarning("[Gamebeast] GetService called before Init.");
+                GBLog.Warn($"GetService<{typeof(TService).Name}> called before Setup.");
                 return null;
             }
 
-            var type = typeof(TService);
-            if (_services.TryGetValue(type, out var serviceObj))
+            if (_services.TryGetValue(typeof(TService), out var service))
             {
-                return serviceObj as TService;
+                return service as TService;
             }
 
-            Debug.LogWarning($"[Gamebeast] No service registered for type {type.Name}.");
+            GBLog.Warn($"No service registered for type {typeof(TService).Name}.");
             return null;
+        }
+
+        private static string ResolveEnvironmentAlias(GamebeastEnvironment environment)
+        {
+            switch (environment)
+            {
+                case GamebeastEnvironment.Production: return "production";
+                case GamebeastEnvironment.Development: return "development";
+                case GamebeastEnvironment.Studio: return "studio";
+                case GamebeastEnvironment.Auto:
+                default:
+                    return Application.isEditor ? "studio" : "production";
+            }
         }
 
         private void Update()
         {
             if (!_initialized) return;
-            // Drive per-frame work for known services.
 
-            var markersService = GetService<MarkersService>();
-            if (markersService != null)
+            var deltaTime = Time.unscaledDeltaTime;
+            foreach (var service in _serviceOrder)
             {
-                markersService.Tick(Time.deltaTime);
+                service.Tick(deltaTime);
             }
+        }
 
-            _taskHandler.Update();
+        private void OnApplicationPause(bool paused)
+        {
+            if (!_initialized) return;
 
+            foreach (var service in _serviceOrder)
+            {
+                service.OnApplicationPause(paused);
+            }
         }
 
         private void OnApplicationQuit()
         {
             if (!_initialized) return;
 
-            var markersService = GetService<MarkersService>();
-            markersService.Cleanup();
+            foreach (var service in _serviceOrder)
+            {
+                try
+                {
+                    service.Shutdown();
+                }
+                catch (Exception ex)
+                {
+                    GBLog.Error($"Error shutting down {service.GetType().Name}: {ex}");
+                }
+            }
         }
     }
 }

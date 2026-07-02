@@ -1,8 +1,6 @@
 #if UNITY_EDITOR
 using UnityEditor;
 using UnityEngine;
-using Gamebeast.Runtime.Internal.Utils;
-using System.Collections.Generic;
 using Newtonsoft.Json;
 using System.Linq;
 using System;
@@ -11,34 +9,8 @@ namespace Gamebeast.Editor
 {
     public class SimplePluginWindow : EditorWindow
     {
-        // Optional: some state if you want to display output
-
-        private class Point
-        {
-            public float x;
-            public float y;
-            public float z;
-        }
-        private class HeatmapBounds
-        {
-            public Point pointA;
-            public Point pointB;
-        }
-        private class HeatmapDetails
-        {
-            public string id;
-            public string name;
-            public string description;
-            public HeatmapBounds bounds;
-            public float resolutionFactor;
-        }
-
-        private class NewHeatmapResponse {
-            public string id;
-        }
-
         private string _statusMessage = "Idle";
-		private HeatmapDetails _selectedHeatmap = null;
+        private HeatmapDetails _selectedHeatmap = null;
         private HeatmapDetails[] _fetchedHeatmaps = new HeatmapDetails[0];
 
         [SerializeField] private Transform _cornerA;
@@ -46,14 +18,16 @@ namespace Gamebeast.Editor
         [SerializeField] private float _paddingWorld = 0f;
         private const int MaxOutputDimension = 512;
 
-		private Texture2D _previewTexture;
+        private Texture2D _previewTexture;
         private float _previewResolutionFactor = 1.0f;
         private byte[] _previewPngBytes;
-		private Vector2 _previewScroll;
+        private Vector2 _previewScroll;
         private string _currentKey = "";
         private string _nameField = "";
         private string _descField = "";
         private bool _isFetched = false;
+
+        private HeatmapEditorApi _api;
 
         [MenuItem("Tools/Gamebeast/Heatmaps")]
         public static void ShowWindow()
@@ -67,12 +41,11 @@ namespace Gamebeast.Editor
         {
             EditorGUILayout.LabelField("Status:", _statusMessage);
 
-
-
             var newKey = EditorGUILayout.TextField("API Key:", _currentKey);
             if (newKey != _currentKey)
             {
                 _currentKey = newKey;
+                _api = null; // key changed; rebuild the client on next fetch
                 _statusMessage = "API Key updated.";
             }
 
@@ -93,14 +66,13 @@ namespace Gamebeast.Editor
 
             using (new EditorGUI.DisabledScope(_fetchedHeatmaps.Length == 0))
             {
-                if ( EditorGUILayout.DropdownButton(new GUIContent(_selectedHeatmap?.name ?? "Select Heatmap"), FocusType.Passive, GUILayout.Height(20)))
+                if (EditorGUILayout.DropdownButton(new GUIContent(_selectedHeatmap?.name ?? "Select Heatmap"), FocusType.Passive, GUILayout.Height(20)))
                 {
-
                     var menu = new GenericMenu();
                     foreach (var heatmap in _fetchedHeatmaps)
                     {
                         var captured = heatmap; // avoid modified-closure issue
-                        menu.AddItem(new GUIContent(captured.name), _selectedHeatmap.id == captured.id, () =>
+                        menu.AddItem(new GUIContent(captured.name), _selectedHeatmap?.id == captured.id, () =>
                         {
                             SelectHeatmap(captured.id);
                         });
@@ -117,110 +89,21 @@ namespace Gamebeast.Editor
             {
                 if (GUILayout.Button("Create new Heatmap", GUILayout.Height(20)))
                 {
-                    var newHeatmap = new HeatmapDetails
-                    {
-                        name = "New Heatmap",
-                        description = "",
-                        bounds = new HeatmapBounds
-                        {
-                            pointA = new Point { x = 0, y = 0, z = 0 },
-                            pointB = new Point { x = 10, y = 0, z = 10 },
-                        },
-                        resolutionFactor = 1.0f,
-                    };     
-
-                    // Ensure name is unique by appending a number if needed
-
-                    var num = 2;
-                    while (true)
-                    {
-                        var exists = false;
-                        foreach (var hm in _fetchedHeatmaps)
-                        {
-                            if (hm.name == newHeatmap.name)
-                            {
-                                exists = true;
-                                break;
-                            }
-                        }
-                        if (!exists) break;
-                        newHeatmap.name = "New Heatmap (" + num + ")";
-                        num++;
-                    }
-
-                    GBRequest.MakeRequestAsync<NewHeatmapResponse>(GBRequestType.CreateHeatmap, newHeatmap).ContinueWith(task =>
-                    {
-                        if (task.IsFaulted)
-                        {
-                            _statusMessage = "Create failed. See Console.";
-                            Debug.LogError($"[Gamebeast Heatmaps] Create failed: {task.Exception}");
-                        }
-                        else
-                        {
-                            var createdId = task.Result.id;
-                            _statusMessage = "Created new heatmap with ID: " + createdId;
-                            Debug.Log("[Gamebeast Heatmaps] Created new heatmap with ID: " + createdId);
-
-                            newHeatmap.id = createdId;
-                            _fetchedHeatmaps = _fetchedHeatmaps.Append(newHeatmap).ToArray();
-
-
-                            SelectHeatmap(createdId);
-                            
-                        }
-                        Repaint();
-                    });
+                    CreateHeatmap();
                 }
 
                 if (_selectedHeatmap != null && GUILayout.Button("Delete Heatmap", GUILayout.Height(20), GUILayout.Width(140)))
                 {
-                    if (_selectedHeatmap == null) return;
-
                     var ok = EditorUtility.DisplayDialog(
                         "Delete heatmap?",
                         $"This will permanently delete '{_selectedHeatmap.name}'.\n\nThis cannot be undone.",
                         "Delete",
                         "Cancel");
 
-                    if (!ok) return;
-
-                    // Do the actual delete here (API call, update UI, etc.)
-
-                    GBRequest.MakeRequestAsync<string>(GBRequestType.DeleteHeatmap, urlParams: new Dictionary<string, string> { { "id",  _selectedHeatmap.id } }).ContinueWith(task =>
+                    if (ok)
                     {
-                        if (task.IsFaulted)
-                        {
-                            _statusMessage = "Delete failed. See Console.";
-                            Debug.LogError($"[Gamebeast Heatmaps] Delete failed: {task.Exception}");
-                        }
-                        else
-                        {
-                            _statusMessage = "Deleted heatmap successfully.";
-                            Debug.Log("[Gamebeast Heatmaps] Deleted heatmap successfully.");
-
-                            // Remove from local list
-                            var remaining = new List<HeatmapDetails>();
-                            foreach (var hm in _fetchedHeatmaps)
-                            {
-                                if (hm.id != _selectedHeatmap.id)
-                                {
-                                    remaining.Add(hm);
-                                }
-                            }
-                            _fetchedHeatmaps = remaining.ToArray();
-
-                            // Select first heatmap or null
-                            if (_fetchedHeatmaps.Length > 0)
-                            {
-                                SelectHeatmap(_fetchedHeatmaps[0].id);
-                            }
-                            else
-                            {
-                                _selectedHeatmap = null;
-                            }
-                        }
-                        Repaint();
-                    });
+                        DeleteSelectedHeatmap();
+                    }
                 }
             }
 
@@ -239,44 +122,9 @@ namespace Gamebeast.Editor
                 GUILayout.FlexibleSpace();
                 if (GUILayout.Button("Save Details", GUILayout.Width(140)))
                 {
-                    var toSave = new HeatmapDetails
-                    {
-                        name = _nameField,
-                        description = _descField,
-                        bounds = _selectedHeatmap.bounds,
-                        resolutionFactor = _selectedHeatmap.resolutionFactor,
-                    };
-
-                    Debug.Log("Saving with name " + toSave.name + " desc " + toSave.description);
-
-                    GBRequest.MakeRequestAsync<string>(GBRequestType.UpdateHeatmap, toSave, urlParams: new Dictionary<string, string> { { "id", _selectedHeatmap.id } }).ContinueWith(task =>
-                    {
-                        if (task.IsFaulted)
-                        {
-                            _statusMessage = "Update failed. See Console.";
-                            Debug.LogError($"[Gamebeast Heatmaps] Update failed: {task.Exception}");
-                        }
-                        else
-                        {
-                            _statusMessage = "Updated heatmap details successfully.";
-                            Debug.Log("[Gamebeast Heatmaps] Updated heatmap details successfully.");
-                            Debug.Log(task.Result);
-
-                            _selectedHeatmap.name = _nameField;
-                            _selectedHeatmap.description = _descField;
-
-                            SelectHeatmap(_selectedHeatmap.id);
-
-
-                            Debug.Log(JsonConvert.SerializeObject(_fetchedHeatmaps, Formatting.Indented));
-                        }
-                        Repaint();
-                    });
+                    SaveSelectedHeatmapDetails();
                 }
-
-                
             }
-        
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Capture Area", EditorStyles.boldLabel);
@@ -303,7 +151,6 @@ namespace Gamebeast.Editor
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
-            //_paddingWorld = EditorGUILayout.FloatField("Padding", _paddingWorld);
 
             var computed = ComputeOutputSize();
             EditorGUILayout.LabelField("Computed Size", computed.HasValue ? $"{computed.Value.x} x {computed.Value.y}" : "—");
@@ -336,10 +183,150 @@ namespace Gamebeast.Editor
                 GUI.DrawTexture(rect, _previewTexture, ScaleMode.ScaleToFit, alphaBlend: true);
                 EditorGUILayout.EndScrollView();
             }
-
         }
 
-		private void RenderPreview()
+        private HeatmapEditorApi GetApi()
+        {
+            if (_api == null)
+            {
+                _api = new HeatmapEditorApi(_currentKey);
+            }
+            return _api;
+        }
+
+        private async void FetchHeatmaps()
+        {
+            try
+            {
+                _fetchedHeatmaps = await GetApi().ListAsync();
+                _isFetched = true;
+                Debug.Log("[Gamebeast Heatmaps] Fetched heatmaps successfully.");
+                Debug.Log(JsonConvert.SerializeObject(_fetchedHeatmaps, Formatting.Indented));
+
+                if (_fetchedHeatmaps.Length > 0)
+                {
+                    SelectHeatmap(_fetchedHeatmaps[0].id);
+                    _statusMessage = "Selected first heatmap: " + _selectedHeatmap.name;
+                }
+                else
+                {
+                    _selectedHeatmap = null;
+                    _statusMessage = "No heatmaps available.";
+                }
+            }
+            catch (Exception ex)
+            {
+                _statusMessage = "Fetch failed. See Console.";
+                Debug.LogError($"[Gamebeast Heatmaps] Fetch failed: {ex}");
+            }
+
+            Repaint();
+        }
+
+        private async void CreateHeatmap()
+        {
+            var newHeatmap = new HeatmapDetails
+            {
+                name = "New Heatmap",
+                description = "",
+                bounds = new HeatmapBounds
+                {
+                    pointA = new HeatmapPoint { x = 0, y = 0, z = 0 },
+                    pointB = new HeatmapPoint { x = 10, y = 0, z = 10 },
+                },
+                resolutionFactor = 1.0f,
+            };
+
+            // Ensure name is unique by appending a number if needed
+            var num = 2;
+            while (_fetchedHeatmaps.Any(hm => hm.name == newHeatmap.name))
+            {
+                newHeatmap.name = "New Heatmap (" + num + ")";
+                num++;
+            }
+
+            try
+            {
+                var createdId = await GetApi().CreateAsync(newHeatmap);
+                _statusMessage = "Created new heatmap with ID: " + createdId;
+                Debug.Log("[Gamebeast Heatmaps] Created new heatmap with ID: " + createdId);
+
+                newHeatmap.id = createdId;
+                _fetchedHeatmaps = _fetchedHeatmaps.Append(newHeatmap).ToArray();
+
+                SelectHeatmap(createdId);
+            }
+            catch (Exception ex)
+            {
+                _statusMessage = "Create failed. See Console.";
+                Debug.LogError($"[Gamebeast Heatmaps] Create failed: {ex}");
+            }
+
+            Repaint();
+        }
+
+        private async void DeleteSelectedHeatmap()
+        {
+            var toDelete = _selectedHeatmap;
+            if (toDelete == null) return;
+
+            try
+            {
+                await GetApi().DeleteAsync(toDelete.id);
+                _statusMessage = "Deleted heatmap successfully.";
+                Debug.Log("[Gamebeast Heatmaps] Deleted heatmap successfully.");
+
+                _fetchedHeatmaps = _fetchedHeatmaps.Where(hm => hm.id != toDelete.id).ToArray();
+
+                if (_fetchedHeatmaps.Length > 0)
+                {
+                    SelectHeatmap(_fetchedHeatmaps[0].id);
+                }
+                else
+                {
+                    _selectedHeatmap = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _statusMessage = "Delete failed. See Console.";
+                Debug.LogError($"[Gamebeast Heatmaps] Delete failed: {ex}");
+            }
+
+            Repaint();
+        }
+
+        private async void SaveSelectedHeatmapDetails()
+        {
+            var toSave = new HeatmapDetails
+            {
+                name = _nameField,
+                description = _descField,
+                bounds = _selectedHeatmap.bounds,
+                resolutionFactor = _selectedHeatmap.resolutionFactor,
+            };
+
+            try
+            {
+                await GetApi().UpdateAsync(_selectedHeatmap.id, toSave);
+                _statusMessage = "Updated heatmap details successfully.";
+                Debug.Log("[Gamebeast Heatmaps] Updated heatmap details successfully.");
+
+                _selectedHeatmap.name = _nameField;
+                _selectedHeatmap.description = _descField;
+
+                SelectHeatmap(_selectedHeatmap.id);
+            }
+            catch (Exception ex)
+            {
+                _statusMessage = "Update failed. See Console.";
+                Debug.LogError($"[Gamebeast Heatmaps] Update failed: {ex}");
+            }
+
+            Repaint();
+        }
+
+        private void RenderPreview()
         {
             if (_cornerA == null || _cornerB == null)
             {
@@ -360,7 +347,7 @@ namespace Gamebeast.Editor
             {
                 Width = width,
                 Height = height,
-                PaddingWorld = 0//Mathf.Max(0f, _paddingWorld),
+                PaddingWorld = 0,
             };
 
             try
@@ -379,7 +366,7 @@ namespace Gamebeast.Editor
                 _previewPngBytes = _previewTexture.EncodeToPNG();
                 _statusMessage = $"Preview rendered ({width} x {height}).";
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 _statusMessage = "Preview render failed. See Console.";
                 Debug.LogError($"[Gamebeast Heatmaps] Render failed: {ex}");
@@ -419,53 +406,30 @@ namespace Gamebeast.Editor
             }
 
             try
-			{        
+            {
                 var toSave = new HeatmapDetails
                 {
                     name = _selectedHeatmap.name,
                     description = _selectedHeatmap.description,
                     bounds = new HeatmapBounds
                     {
-                        pointA = new Point{ x = _selectedHeatmap.bounds.pointA.x, y = _selectedHeatmap.bounds.pointA.y, z = _selectedHeatmap.bounds.pointA.z },
-                        pointB = new Point{ x = _selectedHeatmap.bounds.pointB.x, y = _selectedHeatmap.bounds.pointB.y, z = _selectedHeatmap.bounds.pointB.z },
+                        pointA = new HeatmapPoint { x = _selectedHeatmap.bounds.pointA.x, y = _selectedHeatmap.bounds.pointA.y, z = _selectedHeatmap.bounds.pointA.z },
+                        pointB = new HeatmapPoint { x = _selectedHeatmap.bounds.pointB.x, y = _selectedHeatmap.bounds.pointB.y, z = _selectedHeatmap.bounds.pointB.z },
                     },
-                    resolutionFactor = Math.Max(1.0f, _previewResolutionFactor)
+                    resolutionFactor = Math.Max(1.0f, _previewResolutionFactor),
                 };
 
-                Debug.Log("Updating resolution factor to " + toSave.resolutionFactor);
-
-                var updateResult = await GBRequest.MakeRequestAsync<string>(
-                    GBRequestType.UpdateHeatmap,
-                    toSave,
-                    urlParams: new Dictionary<string, string> { { "id", _selectedHeatmap.id } });
-
+                await GetApi().UpdateAsync(_selectedHeatmap.id, toSave);
                 Debug.Log("[Gamebeast Heatmaps] Updated heatmap resolution factor successfully.");
-                Debug.Log(updateResult);
 
                 _selectedHeatmap.resolutionFactor = _previewResolutionFactor;
                 SelectHeatmap(_selectedHeatmap.id);
 
                 try
                 {
-                    var uploadResult = await Requester.PostAsync<string>(
-                        $"/sdk/v1/heatmaps/{_selectedHeatmap.id}/image",
-                        body: pngBytes,
-                        headers: new Dictionary<string, string>
-                        {
-                            { "content-type", "image/png" },
-                            { "authorization", _currentKey }
-                        }
-                    );
-
+                    await GetApi().UploadImageAsync(_selectedHeatmap.id, pngBytes);
                     _statusMessage = "Uploaded heatmap image successfully.";
                     Debug.Log("[Gamebeast Heatmaps] Uploaded heatmap image successfully.");
-                    Debug.Log(uploadResult);
-
-                    if (true) {
-                        return;
-                    }
-
-                    
                 }
                 catch (Exception ex)
                 {
@@ -478,9 +442,7 @@ namespace Gamebeast.Editor
                 Debug.LogError($"[Gamebeast Heatmaps] Update resolution factor failed: {ex}");
             }
 
-			
-
-			Repaint();
+            Repaint();
         }
 
         private void OnDisable()
@@ -491,7 +453,7 @@ namespace Gamebeast.Editor
                 _previewTexture = null;
             }
 
-			_previewPngBytes = null;
+            _previewPngBytes = null;
         }
 
         private Vector2Int? ComputeOutputSize()
@@ -519,12 +481,12 @@ namespace Gamebeast.Editor
             return new Vector2Int(pxW, pxH);
         }
 
-
-       
-        private void SelectHeatmap(string id) {
+        private void SelectHeatmap(string id)
+        {
             foreach (var heatmap in _fetchedHeatmaps)
             {
-                if (heatmap.id == id) {
+                if (heatmap.id == id)
+                {
                     _selectedHeatmap = heatmap;
                     _statusMessage = "Selected Heatmap: " + heatmap.name;
 
@@ -535,41 +497,6 @@ namespace Gamebeast.Editor
                     return;
                 }
             }
-            
-        }    
-        private void FetchHeatmaps()
-        {
-            GBRequest.SetApiKey(_currentKey);
-            GBRequest.MakeRequestAsync<HeatmapDetails[]>(GBRequestType.GetHeatmaps).ContinueWith(task =>
-            {
-                if (task.IsFaulted)
-                {
-                    _statusMessage = "Fetch failed. See Console.";
-                    Debug.LogError($"[Gamebeast Heatmaps] Fetch failed: {task.Exception}");
-                }
-                else
-                {
-                    _isFetched = true;
-                    _statusMessage = "Fetched heatmaps successfully.";
-                    Debug.Log("[Gamebeast Heatmaps] Fetched heatmaps successfully.");
-                    Debug.Log(JsonConvert.SerializeObject(task.Result, Formatting.Indented));
-                    _fetchedHeatmaps = task.Result;
-
-                    if (_fetchedHeatmaps.Length > 0)
-                    {
-                        SelectHeatmap(_fetchedHeatmaps[0].id);
-                        _statusMessage = "Selected first heatmap: " + _selectedHeatmap.name;
-                    }
-                    else
-                    {
-                        _selectedHeatmap = null;
-                        _statusMessage = "No heatmaps available.";
-                    }
-                }
-                Repaint();
-            });
-
-            Repaint();
         }
     }
 }

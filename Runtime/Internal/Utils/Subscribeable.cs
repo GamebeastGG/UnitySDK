@@ -1,41 +1,58 @@
 using System;
+using System.Collections.Generic;
 
-namespace Gamebeast.Runtime.Internal.Utils
+namespace Gamebeast.Internal.Utils
 {
-    public class Subscribeable<T>
+    /// <summary>
+    /// Minimal event source with IDisposable subscriptions. A throwing subscriber
+    /// is logged and does not prevent other subscribers from running.
+    /// </summary>
+    internal sealed class Subscribeable<T>
     {
-        internal Action<T> trigger;
-        private class Subscription : IDisposable
+        private readonly List<Subscription> _subscriptions = new List<Subscription>();
+
+        private sealed class Subscription : IDisposable
         {
-            private bool _disposed;
-            internal Action<T> _callback;
+            internal readonly Action<T> Callback;
             private Subscribeable<T> _parent;
+
             public Subscription(Subscribeable<T> parent, Action<T> callback)
             {
-                _callback = callback;
                 _parent = parent;
+                Callback = callback;
             }
 
             public void Dispose()
             {
-                if (_disposed) return;
-                _disposed = true;
-                _parent.trigger -= _callback;
+                _parent?._subscriptions.Remove(this);
                 _parent = null;
             }
         }
 
         public IDisposable Subscribe(Action<T> callback)
         {
-            var newSubscription = new Subscription(this, callback);
-            trigger += callback;
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
 
-            return newSubscription;
+            var subscription = new Subscription(this, callback);
+            _subscriptions.Add(subscription);
+            return subscription;
         }
 
         public void Trigger(T arg)
         {
-            trigger?.Invoke(arg);
+            // Copy so subscribers can dispose (or add) subscriptions while firing.
+            var snapshot = _subscriptions.ToArray();
+            foreach (var subscription in snapshot)
+            {
+                try
+                {
+                    subscription.Callback(arg);
+                }
+                catch (Exception ex)
+                {
+                    GBLog.Error($"Subscriber threw: {ex}");
+                }
+            }
         }
     }
 }

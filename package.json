@@ -3,7 +3,7 @@
   "displayName": "Gamebeast SDK",
   "version": "0.1.0",
   "unity": "2021.3",
-  "description": "Runtime SDK for Gamebeast: markers, requests, and core runtime.",
+  "description": "Client SDK for Gamebeast: engagement markers and remote configurations.",
   "author": {
     "name": "Gamebeast, Inc.",
     "email": "devrel@gamebeast.gg",
