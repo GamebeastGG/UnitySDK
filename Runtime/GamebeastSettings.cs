@@ -10,8 +10,7 @@ namespace Gamebeast
         /// <summary>Resolves to Studio inside the Unity Editor and Production in builds.</summary>
         Auto = 0,
         Production,
-        Development,
-        Studio,
+        Development
     }
 
     /// <summary>

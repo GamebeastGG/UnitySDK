@@ -130,10 +130,9 @@ namespace Gamebeast.Internal
             {
                 case GamebeastEnvironment.Production: return "production";
                 case GamebeastEnvironment.Development: return "development";
-                case GamebeastEnvironment.Studio: return "studio";
                 case GamebeastEnvironment.Auto:
                 default:
-                    return Application.isEditor ? "studio" : "production";
+                    return Application.isEditor ? "development" : "production";
             }
         }
 
