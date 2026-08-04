@@ -25,13 +25,24 @@ namespace Gamebeast.Internal
 
         public static DistinctIdentity Resolve(string explicitDistinctId)
         {
-            if (!string.IsNullOrWhiteSpace(explicitDistinctId))
-            {
-                return new DistinctIdentity(explicitDistinctId.Trim(), isAnonymous: false);
-            }
+            return string.IsNullOrWhiteSpace(explicitDistinctId)
+                ? Anonymous()
+                : Explicit(explicitDistinctId);
+        }
 
-            // Keep the stored anonymous id stable even if a developer-supplied id is
-            // used in some sessions, so anonymous sessions always map to the same user.
+        /// <summary>A developer-supplied distinct id (from Setup or Identify).</summary>
+        public static DistinctIdentity Explicit(string distinctId)
+        {
+            return new DistinctIdentity(distinctId.Trim(), isAnonymous: false);
+        }
+
+        /// <summary>
+        /// The device's persisted anonymous id, generated on first use.
+        /// Kept stable even if a developer-supplied id is used in some sessions,
+        /// so anonymous sessions always map to the same user.
+        /// </summary>
+        public static DistinctIdentity Anonymous()
+        {
             var stored = PlayerPrefs.GetString(PlayerPrefsKey, string.Empty);
             if (string.IsNullOrEmpty(stored))
             {

@@ -8,7 +8,12 @@ using Newtonsoft.Json.Linq;
 namespace Gamebeast.Internal.Services
 {
     /// <summary>
-    /// Remote configurations backed by GET /sdk/v2/configurations.
+    /// Remote configurations backed by POST /sdk/v2/configurations/evaluate.
+    ///
+    /// Configurations are evaluated for the local user: the backend resolves any
+    /// active experiment assignments (recording exposure) and returns the document
+    /// with the assigned groups' changes already merged in. Applied assignments are
+    /// forwarded to <see cref="ExperimentsService"/>.
     ///
     /// Each configuration gets its own state: last response cached on disk (stamped
     /// with the app version, so stale caches from older builds are discarded),
@@ -59,6 +64,7 @@ namespace Gamebeast.Internal.Services
         }
 
         private GamebeastContext _context;
+        private ExperimentsService _experiments;
 
         private readonly Dictionary<string, ConfigState> _configs =
             new Dictionary<string, ConfigState>(StringComparer.OrdinalIgnoreCase);
@@ -68,6 +74,16 @@ namespace Gamebeast.Internal.Services
 
         private bool _isReady;
         private float _timeSinceLastRefresh;
+
+        /// <summary>Bumped on identity swaps so responses evaluated for the previous user are discarded.</summary>
+        private int _identityGeneration;
+
+        /// <summary>
+        /// How often configurations that have never loaded are retried, independent of
+        /// the normal refresh cadence, so flaky launch networks still reach readiness.
+        /// </summary>
+        private const float UnloadedRetrySeconds = 10f;
+        private float _timeSinceUnloadedRetry;
 
         public bool IsReady => _isReady;
 
@@ -106,7 +122,7 @@ namespace Gamebeast.Internal.Services
             };
             _configs[alias] = state;
 
-            var cached = state.Cache.Load();
+            var cached = state.Cache.Load(_context.Identity.DistinctId);
             if (cached != null)
             {
                 ApplyResponse(state, cached, persist: false);
@@ -239,7 +255,17 @@ namespace Gamebeast.Internal.Services
         {
             try
             {
-                var result = await _context.Api.GetConfigurationAsync(state.Alias, state.Hash);
+                var generation = _identityGeneration;
+                var result = await _context.Api.GetConfigurationAsync(
+                    state.Alias,
+                    state.Hash,
+                    _context.Identity.DistinctId,
+                    EvaluationContextBuilder.BuildProperties(_context.Settings));
+
+                // The identity changed while this request was in flight; the response
+                // was evaluated for the previous user, so drop it.
+                if (generation != _identityGeneration) return;
+
                 switch (result.Status)
                 {
                     case ConfigurationFetchStatus.Updated:
@@ -280,6 +306,8 @@ namespace Gamebeast.Internal.Services
         {
             if (_configs.Count == 0) return;
 
+            RetryUnloadedConfigs(deltaTime);
+
             var interval = _context.Settings.ConfigRefreshIntervalSeconds;
             if (interval <= 0f) return;
 
@@ -287,6 +315,26 @@ namespace Gamebeast.Internal.Services
             if (_timeSinceLastRefresh >= interval)
             {
                 KickOffRefresh();
+            }
+        }
+
+        /// <summary>
+        /// Configurations whose initial fetch failed retry sooner than the refresh
+        /// interval (and even when background refresh is disabled) — otherwise
+        /// IsReady could take a full interval, or forever, to recover at launch.
+        /// </summary>
+        private void RetryUnloadedConfigs(float deltaTime)
+        {
+            _timeSinceUnloadedRetry += deltaTime;
+            if (_timeSinceUnloadedRetry < UnloadedRetrySeconds) return;
+            _timeSinceUnloadedRetry = 0f;
+
+            foreach (var state in _configs.Values)
+            {
+                if (!state.Loaded && state.RefreshInFlight == null)
+                {
+                    KickOffConfigRefresh(state);
+                }
             }
         }
 
@@ -298,6 +346,33 @@ namespace Gamebeast.Internal.Services
             {
                 KickOffRefresh();
             }
+        }
+
+        public void OnIdentityChanged()
+        {
+            // Evaluated content is per-user: discard in-flight responses, drop hashes
+            // so every config refetches in full, and refresh for the new user. Current
+            // values keep serving until the re-evaluated ones land.
+            _identityGeneration++;
+
+            foreach (var state in _configs.Values)
+            {
+                state.Hash = null;
+                RefreshAfterInFlight(state);
+            }
+        }
+
+        private async void RefreshAfterInFlight(ConfigState state)
+        {
+            var inFlight = state.RefreshInFlight;
+            if (inFlight != null)
+            {
+                // Let the stale request finish (its result is discarded by the
+                // generation check) so the de-dupe slot frees up for ours.
+                try { await inFlight; } catch { /* logged by DoRefreshConfig */ }
+            }
+
+            await RefreshConfigAsync(state);
         }
 
         public void Shutdown()
@@ -328,11 +403,23 @@ namespace Gamebeast.Internal.Services
 
             if (persist)
             {
-                state.Cache.Save(response);
+                state.Cache.Save(response, _context.Identity.DistinctId);
             }
 
+            ReportExperiments(state.Alias, response);
             NotifyListeners(state.Alias, wasLoaded, oldValues, newValues);
             CheckReady();
+        }
+
+        /// <summary>
+        /// Forward the assignments echoed on an evaluated response (fresh or disk-cached)
+        /// to the experiments service. Resolved lazily; services register together but
+        /// disk caches can load during our own Initialize.
+        /// </summary>
+        private void ReportExperiments(string alias, SdkConfigurationV2Response response)
+        {
+            _experiments ??= GamebeastRuntime.Instance.GetService<IExperimentsService>() as ExperimentsService;
+            _experiments?.ReportAssignments(alias, response.Experiments);
         }
 
         private void NotifyListeners(string alias, bool wasLoaded, JObject oldValues, JObject newValues)

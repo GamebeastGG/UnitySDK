@@ -15,7 +15,9 @@ namespace Gamebeast.Internal.Utils
     ///
     /// Entries are stamped with the app version (and SDK version) that wrote them:
     /// a cache written by a different build is discarded, so an updated game never
-    /// boots with configs meant for the previous version.
+    /// boots with configs meant for the previous version. They are also stamped
+    /// with the distinct id they were evaluated for: configurations carry per-user
+    /// experiment variants, so another user's cache must never be served.
     /// </summary>
     internal sealed class ConfigDiskCache
     {
@@ -26,6 +28,9 @@ namespace Gamebeast.Internal.Utils
 
             [JsonProperty("sdkVersion")]
             public string SdkVersion;
+
+            [JsonProperty("distinctId")]
+            public string DistinctId;
 
             [JsonProperty("response")]
             public SdkConfigurationV2Response Response;
@@ -40,7 +45,7 @@ namespace Gamebeast.Internal.Utils
             _filePath = Path.Combine(directory, fileName);
         }
 
-        public SdkConfigurationV2Response Load()
+        public SdkConfigurationV2Response Load(string distinctId)
         {
             try
             {
@@ -56,6 +61,12 @@ namespace Gamebeast.Internal.Utils
                     return null;
                 }
 
+                if (envelope.DistinctId != distinctId)
+                {
+                    GBLog.Info("Discarding config cache evaluated for a different user.");
+                    return null;
+                }
+
                 return envelope.Response;
             }
             catch (Exception ex)
@@ -65,7 +76,7 @@ namespace Gamebeast.Internal.Utils
             }
         }
 
-        public void Save(SdkConfigurationV2Response response)
+        public void Save(SdkConfigurationV2Response response, string distinctId)
         {
             try
             {
@@ -73,6 +84,7 @@ namespace Gamebeast.Internal.Utils
                 {
                     AppVersion = Application.version,
                     SdkVersion = GamebeastApiClient.SdkVersion,
+                    DistinctId = distinctId,
                     Response = response,
                 };
 

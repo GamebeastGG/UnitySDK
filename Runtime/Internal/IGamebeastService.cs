@@ -16,6 +16,12 @@ namespace Gamebeast.Internal
         /// <summary>Called when the app is paused/resumed (mobile backgrounding).</summary>
         void OnApplicationPause(bool paused);
 
+        /// <summary>
+        /// Called after the local user's distinct id changed (Identify/ResetIdentity).
+        /// The new identity is already on the context when this fires.
+        /// </summary>
+        void OnIdentityChanged();
+
         /// <summary>Called when the app quits. Flush any pending work here.</summary>
         void Shutdown();
     }

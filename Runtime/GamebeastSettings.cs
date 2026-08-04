@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Gamebeast
 {
@@ -7,7 +8,7 @@ namespace Gamebeast
     /// </summary>
     public enum GamebeastEnvironment
     {
-        /// <summary>Resolves to Studio inside the Unity Editor and Production in builds.</summary>
+        /// <summary>Resolves to Development inside the Unity Editor and Production in builds.</summary>
         Auto = 0,
         Production,
         Development
@@ -33,6 +34,13 @@ namespace Gamebeast
         public GamebeastEnvironment Environment = GamebeastEnvironment.Auto;
 
         /// <summary>
+        /// Optional: target a custom environment by its alias, as configured in the
+        /// Gamebeast dashboard (e.g. "staging"). Takes precedence over
+        /// <see cref="Environment"/> when set.
+        /// </summary>
+        public string CustomEnvironment;
+
+        /// <summary>
         /// Optional: configurations to preload at startup, by alias (URL-safe slug of the
         /// configuration name), e.g. new[] { "ConfigA", "ConfigB" }. Preloaded
         /// configurations are fetched immediately and gate Configs.IsReady/OnReady.
@@ -47,6 +55,24 @@ namespace Gamebeast
         /// Set to 0 to disable background refresh (you can still call Configs.RefreshAsync()).
         /// </summary>
         public float ConfigRefreshIntervalSeconds = 60f;
+
+        /// <summary>
+        /// Optional custom properties describing the local user, sent as targeting
+        /// context with every configuration evaluation (e.g. { "vip", true }).
+        /// The SDK always includes standard device/app properties (platform,
+        /// operatingSystem, deviceModel, deviceType, systemLanguage, appVersion);
+        /// custom values win when keys collide. The dictionary is read live on every
+        /// refresh, so entries added later take effect on the next refresh
+        /// (call Configs.RefreshAsync() to apply immediately).
+        /// </summary>
+        public Dictionary<string, object> UserProperties;
+
+        /// <summary>
+        /// Rotate the session id when the app has been backgrounded for at least this
+        /// many seconds, so returning after a long break counts as a new session.
+        /// Set to 0 to keep one session per app run.
+        /// </summary>
+        public float SessionTimeoutSeconds = 1800f;
 
         /// <summary>Enables verbose SDK logging in the console.</summary>
         public bool DebugLogging = false;

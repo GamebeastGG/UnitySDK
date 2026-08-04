@@ -26,6 +26,9 @@ namespace Gamebeast.Internal
 
         private bool _initialized;
 
+        /// <summary>Wall-clock time the app was backgrounded, for session rotation.</summary>
+        private DateTime? _backgroundedAtUtc;
+
         public GamebeastContext Context { get; private set; }
 
         private static GamebeastRuntime EnsureInstance()
@@ -64,7 +67,7 @@ namespace Gamebeast.Internal
 
             GBLog.DebugEnabled = settings.DebugLogging;
 
-            var environmentAlias = ResolveEnvironmentAlias(settings.Environment);
+            var environmentAlias = ResolveEnvironmentAlias(settings);
             var identity = DistinctIdentity.Resolve(settings.DistinctId);
             var sessionId = "unity-" + Guid.NewGuid().ToString("N");
             var api = new GamebeastApiClient(settings, environmentAlias, sessionId);
@@ -73,6 +76,8 @@ namespace Gamebeast.Internal
 
             RegisterService<IMarkersService>(new MarkersService());
             RegisterService<IConfigsService>(new ConfigsService());
+            RegisterService<IExperimentsService>(new ExperimentsService());
+            RegisterService<ICohortsService>(new CohortsService());
 
             _initialized = true;
 
@@ -103,6 +108,62 @@ namespace Gamebeast.Internal
             _serviceOrder.Add(instance);
         }
 
+        /// <summary>Switch the local user's distinct id (e.g. after login).</summary>
+        public void Identify(string distinctId)
+        {
+            if (!_initialized)
+            {
+                GBLog.Error("Identify called before Setup.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(distinctId))
+            {
+                GBLog.Error("Identify requires a non-empty distinct id.");
+                return;
+            }
+
+            var identity = DistinctIdentity.Explicit(distinctId);
+            if (Context.Identity.DistinctId == identity.DistinctId) return;
+
+            Context.SetIdentity(identity);
+            NotifyIdentityChanged();
+        }
+
+        /// <summary>Revert to the device's persisted anonymous distinct id (e.g. after logout).</summary>
+        public void ResetIdentity()
+        {
+            if (!_initialized)
+            {
+                GBLog.Error("ResetIdentity called before Setup.");
+                return;
+            }
+
+            var identity = DistinctIdentity.Anonymous();
+            if (Context.Identity.DistinctId == identity.DistinctId) return;
+
+            Context.SetIdentity(identity);
+            NotifyIdentityChanged();
+        }
+
+        private void NotifyIdentityChanged()
+        {
+            GBLog.Info($"Distinct id is now '{Context.Identity.DistinctId}' " +
+                       $"({(Context.Identity.IsAnonymous ? "anonymous" : "explicit")}).");
+
+            foreach (var service in _serviceOrder)
+            {
+                try
+                {
+                    service.OnIdentityChanged();
+                }
+                catch (Exception ex)
+                {
+                    GBLog.Error($"Error notifying {service.GetType().Name} of identity change: {ex}");
+                }
+            }
+        }
+
         /// <summary>
         /// Resolve a service by its public interface. Returns null (with a warning)
         /// before Setup or for unknown types.
@@ -124,9 +185,15 @@ namespace Gamebeast.Internal
             return null;
         }
 
-        private static string ResolveEnvironmentAlias(GamebeastEnvironment environment)
+        private static string ResolveEnvironmentAlias(GamebeastSettings settings)
         {
-            switch (environment)
+            // A custom environment alias from the dashboard wins over the enum.
+            if (!string.IsNullOrWhiteSpace(settings.CustomEnvironment))
+            {
+                return settings.CustomEnvironment.Trim();
+            }
+
+            switch (settings.Environment)
             {
                 case GamebeastEnvironment.Production: return "production";
                 case GamebeastEnvironment.Development: return "development";
@@ -151,15 +218,54 @@ namespace Gamebeast.Internal
         {
             if (!_initialized) return;
 
+            if (paused)
+            {
+                _backgroundedAtUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                // Rotate before services react, so resume-triggered work (config
+                // refreshes, new markers) already runs under the new session.
+                RotateSessionIfExpired();
+            }
+
             foreach (var service in _serviceOrder)
             {
                 service.OnApplicationPause(paused);
             }
         }
 
-        private void OnApplicationQuit()
+        /// <summary>
+        /// A long stay in the background counts as a new session: rotate the session id
+        /// when the app resumes after GamebeastSettings.SessionTimeoutSeconds.
+        /// Wall clock, because Time.realtimeSinceStartup pauses during suspension on
+        /// some platforms.
+        /// </summary>
+        private void RotateSessionIfExpired()
         {
-            if (!_initialized) return;
+            if (_backgroundedAtUtc == null) return;
+
+            var backgroundedSeconds = (DateTime.UtcNow - _backgroundedAtUtc.Value).TotalSeconds;
+            _backgroundedAtUtc = null;
+
+            var timeout = Context.Settings.SessionTimeoutSeconds;
+            if (timeout <= 0f || backgroundedSeconds < timeout) return;
+
+            var sessionId = "unity-" + Guid.NewGuid().ToString("N");
+            Context.SetSessionId(sessionId);
+            Context.Api.SessionId = sessionId;
+
+            GBLog.Info($"App resumed after {backgroundedSeconds:0}s in the background; started new session {sessionId}.");
+        }
+
+        /// <summary>Flush pending work and tear the SDK down; Setup may be called again afterwards.</summary>
+        public void Shutdown()
+        {
+            if (!_initialized)
+            {
+                GBLog.Warn("Shutdown called before Setup; ignoring.");
+                return;
+            }
 
             foreach (var service in _serviceOrder)
             {
@@ -172,6 +278,21 @@ namespace Gamebeast.Internal
                     GBLog.Error($"Error shutting down {service.GetType().Name}: {ex}");
                 }
             }
+
+            _services.Clear();
+            _serviceOrder.Clear();
+            Context = null;
+            _backgroundedAtUtc = null;
+            _initialized = false;
+
+            GBLog.Info("SDK shut down.");
+        }
+
+        private void OnApplicationQuit()
+        {
+            if (!_initialized) return;
+
+            Shutdown();
         }
     }
 }

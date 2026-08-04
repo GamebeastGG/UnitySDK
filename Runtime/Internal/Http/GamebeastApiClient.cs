@@ -16,7 +16,9 @@ namespace Gamebeast.Internal.Http
         private readonly string _baseUrl;
         private readonly string _apiKey;
         private readonly string _environmentAlias;
-        private readonly string _sessionId;
+
+        /// <summary>Kept in sync by the runtime when the session rotates.</summary>
+        public string SessionId { get; set; }
 
         public GamebeastApiClient(GamebeastSettings settings, string environmentAlias, string sessionId)
         {
@@ -25,7 +27,7 @@ namespace Gamebeast.Internal.Http
                 : settings.ApiUrl.TrimEnd('/');
             _apiKey = settings.ApiKey;
             _environmentAlias = environmentAlias;
-            _sessionId = sessionId;
+            SessionId = sessionId;
         }
 
         /// <summary>POST /sdk/v1/markers — send a batch of engagement markers.</summary>
@@ -39,30 +41,38 @@ namespace Gamebeast.Internal.Http
         }
 
         /// <summary>
-        /// GET /sdk/v2/configurations — fetch a configuration by alias (required).
-        /// Passing the hash of the copy we already hold lets the server skip the payload
-        /// when nothing changed.
+        /// POST /sdk/v2/configurations/evaluate — fetch a configuration by alias.
+        /// The backend evaluates it for the local user: active experiment assignments
+        /// are resolved (persisted, exposure recorded) and the winning group's changes
+        /// arrive already merged into the document, with the applied assignments echoed
+        /// alongside. Passing the hash of the copy we already hold lets the server skip
+        /// the payload when nothing changed.
         /// </summary>
-        public async Task<ConfigurationFetchResult> GetConfigurationAsync(string configurationAlias, string knownHash)
+        public async Task<ConfigurationFetchResult> GetConfigurationAsync(
+            string configurationAlias,
+            string knownHash,
+            string distinctId,
+            Dictionary<string, object> contextProperties)
         {
             if (string.IsNullOrWhiteSpace(configurationAlias))
             {
                 return ConfigurationFetchResult.Failed("configuration alias is required");
             }
 
-            var query = new Dictionary<string, string>
+            var body = new ConfigurationEvaluateRequest
             {
-                { "configuration", configurationAlias },
+                Configuration = configurationAlias,
+                Unit = new EvaluationUnit { DistinctId = distinctId },
+                Context = contextProperties != null && contextProperties.Count > 0
+                    ? new EvaluationContext { Properties = contextProperties }
+                    : null,
+                KnownHash = string.IsNullOrEmpty(knownHash) ? null : knownHash,
             };
-            if (!string.IsNullOrEmpty(knownHash))
-            {
-                query["hash"] = knownHash;
-            }
 
             var response = await HttpRequester.SendAsync(
-                UnityWebRequest.kHttpVerbGET,
-                _baseUrl + "/sdk/v2/configurations",
-                query: query,
+                UnityWebRequest.kHttpVerbPOST,
+                _baseUrl + "/sdk/v2/configurations/evaluate",
+                body: body,
                 headers: BuildHeaders(includeLegacyV1Headers: false));
 
             if (response.TransportError != null)
@@ -75,11 +85,14 @@ namespace Gamebeast.Internal.Http
                 return ConfigurationFetchResult.NotModified();
             }
 
-            if (response.StatusCode == 404)
+            if (response.StatusCode == 404 || response.StatusCode == 400)
             {
                 var error = HttpRequester.TryParse<SdkV2ErrorResponse>(response);
-                var message = error != null ? $"{error.ErrorCode}: {error.Message}" : "configuration not found";
-                return ConfigurationFetchResult.NotFound(message);
+                if (response.StatusCode == 404 || (error != null && error.ErrorCode == "CONFIGURATION_NOT_FOUND"))
+                {
+                    var message = error != null ? $"{error.ErrorCode}: {error.Message}" : "configuration not found";
+                    return ConfigurationFetchResult.NotFound(message);
+                }
             }
 
             if (!response.IsSuccess)
@@ -103,6 +116,83 @@ namespace Gamebeast.Internal.Http
             return ConfigurationFetchResult.Updated(parsed);
         }
 
+        /// <summary>
+        /// GET /sdk/v2/experiments/active — the catalog of active user-unit experiments
+        /// (names and group labels), used to enrich assignments for display. Hash-based
+        /// change detection mirrors the configurations endpoint.
+        /// </summary>
+        public async Task<ActiveExperimentsFetchResult> GetActiveExperimentsAsync(string knownHash)
+        {
+            var query = new Dictionary<string, string>
+            {
+                { "unit-type", "user" },
+            };
+            if (!string.IsNullOrEmpty(knownHash))
+            {
+                query["hash"] = knownHash;
+            }
+
+            var response = await HttpRequester.SendAsync(
+                UnityWebRequest.kHttpVerbGET,
+                _baseUrl + "/sdk/v2/experiments/active",
+                query: query,
+                headers: BuildHeaders(includeLegacyV1Headers: false));
+
+            if (response.TransportError != null)
+            {
+                return ActiveExperimentsFetchResult.Failed(response.TransportError);
+            }
+
+            if (response.IsNotModified)
+            {
+                return ActiveExperimentsFetchResult.NotModified();
+            }
+
+            if (!response.IsSuccess)
+            {
+                return ActiveExperimentsFetchResult.Failed($"{response.Describe()} {Truncate(response.Body)}");
+            }
+
+            var parsed = HttpRequester.TryParse<SdkActiveExperimentsV2Response>(response);
+            if (parsed == null)
+            {
+                return ActiveExperimentsFetchResult.Failed("could not parse active experiments response");
+            }
+
+            if (!string.IsNullOrEmpty(knownHash) && parsed.Hash == knownHash)
+            {
+                return ActiveExperimentsFetchResult.NotModified();
+            }
+
+            return ActiveExperimentsFetchResult.Updated(parsed);
+        }
+
+        /// <summary>
+        /// POST /sdk/v1/cohorts/membership — resolve whether the given user is a member
+        /// of the named cohort. Rate-limited by the backend (callers should cache).
+        /// Returns null on transport/protocol failure.
+        /// </summary>
+        public async Task<List<CohortMembershipEntry>> CheckCohortMembershipAsync(string cohortName, string userId)
+        {
+            var response = await HttpRequester.SendAsync(
+                UnityWebRequest.kHttpVerbPOST,
+                _baseUrl + "/sdk/v1/cohorts/membership",
+                body: new CohortMembershipRequest
+                {
+                    CohortName = cohortName,
+                    UserIds = new List<string> { userId },
+                },
+                headers: BuildHeaders(includeLegacyV1Headers: true));
+
+            if (!response.IsSuccess)
+            {
+                GBLog.Warn($"Cohort membership check failed: {response.Describe()} {Truncate(response.Body)}");
+                return null;
+            }
+
+            return HttpRequester.TryParse<List<CohortMembershipEntry>>(response);
+        }
+
         private Dictionary<string, string> BuildHeaders(bool includeLegacyV1Headers)
         {
             var headers = new Dictionary<string, string>
@@ -116,7 +206,7 @@ namespace Gamebeast.Internal.Http
             {
                 // The v1 markers route still expects these Roblox-era headers.
                 headers["universeid"] = "0";
-                headers["serverid"] = _sessionId;
+                headers["serverid"] = SessionId;
                 headers["isstudio"] = _environmentAlias == "studio" ? "true" : "false";
             }
 

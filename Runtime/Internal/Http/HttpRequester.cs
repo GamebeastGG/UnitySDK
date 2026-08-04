@@ -33,6 +33,14 @@ namespace Gamebeast.Internal.Http
     /// </summary>
     internal static class HttpRequester
     {
+        /// <summary>
+        /// Requests must never hang forever: a stuck request would pin in-flight
+        /// de-dupe slots (configs) and stall identity swaps. Timeouts surface as
+        /// transport errors, which callers treat as retryable.
+        /// </summary>
+        private const int DefaultTimeoutSeconds = 10;
+        private const int UploadTimeoutSeconds = 60;
+
         public static async Task<GBHttpResponse> SendAsync(
             string method,
             string url,
@@ -50,6 +58,7 @@ namespace Gamebeast.Internal.Http
             using (var request = new UnityWebRequest(url, method))
             {
                 request.downloadHandler = new DownloadHandlerBuffer();
+                request.timeout = body is byte[] ? UploadTimeoutSeconds : DefaultTimeoutSeconds;
 
                 if (body != null)
                 {

@@ -23,6 +23,7 @@ namespace Gamebeast.Editor
         private byte[] _previewPngBytes;
         private Vector2 _previewScroll;
         private string _currentKey = "";
+        private string _apiUrl = "https://api.gamebeast.gg";
         private string _nameField = "";
         private string _descField = "";
         private bool _isFetched = false;
@@ -47,6 +48,14 @@ namespace Gamebeast.Editor
                 _currentKey = newKey;
                 _api = null; // key changed; rebuild the client on next fetch
                 _statusMessage = "API Key updated.";
+            }
+
+            var newUrl = EditorGUILayout.TextField("API URL:", _apiUrl);
+            if (newUrl != _apiUrl)
+            {
+                _apiUrl = newUrl;
+                _api = null; // url changed; rebuild the client on next fetch
+                _statusMessage = "API URL updated.";
             }
 
             EditorGUILayout.Space();
@@ -189,7 +198,7 @@ namespace Gamebeast.Editor
         {
             if (_api == null)
             {
-                _api = new HeatmapEditorApi(_currentKey);
+                _api = new HeatmapEditorApi(_currentKey, _apiUrl);
             }
             return _api;
         }

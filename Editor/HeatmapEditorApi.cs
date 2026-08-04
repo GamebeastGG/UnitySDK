@@ -37,7 +37,7 @@ namespace Gamebeast.Editor
     /// </summary>
     public sealed class HeatmapEditorApi
     {
-        private const string BaseUrl = "https://api.gamebeast.gg";
+        private const string DefaultBaseUrl = "https://api.gamebeast.gg";
 
         private class CreatedHeatmapResponse
         {
@@ -45,10 +45,12 @@ namespace Gamebeast.Editor
         }
 
         private readonly string _apiKey;
+        private readonly string _baseUrl;
 
-        public HeatmapEditorApi(string apiKey)
+        public HeatmapEditorApi(string apiKey, string apiUrl = null)
         {
             _apiKey = apiKey;
+            _baseUrl = string.IsNullOrWhiteSpace(apiUrl) ? DefaultBaseUrl : apiUrl.TrimEnd('/');
         }
 
         public async Task<HeatmapDetails[]> ListAsync()
@@ -106,7 +108,7 @@ namespace Gamebeast.Editor
                 }
             }
 
-            var response = await HttpRequester.SendAsync(method, BaseUrl + path, body: body, headers: headers);
+            var response = await HttpRequester.SendAsync(method, _baseUrl + path, body: body, headers: headers);
             if (!response.IsSuccess)
             {
                 throw new Exception($"{method} {path} failed: {response.Describe()} {response.Body}");
