@@ -1,12 +1,14 @@
 {
   "name": "com.gamebeast.sdk",
   "displayName": "Gamebeast SDK",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "unity": "2021.3",
-  "description": "Client SDK for Gamebeast: engagement markers and remote configurations.",
+  "description": "Client SDK for Gamebeast",
+  "documentationUrl" : "https://docs.gamebeast.gg",
+  "keywords": ["analytics", "remote-config", "ab-testing", "liveops"],
   "author": {
     "name": "Gamebeast, Inc.",
-    "email": "devrel@gamebeast.gg",
+    "email": "support@gamebeast.gg",
     "url": "https://gamebeast.gg"
   },
   "dependencies": {
