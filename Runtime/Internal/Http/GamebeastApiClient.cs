@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Gamebeast.Internal.Models;
@@ -190,7 +191,17 @@ namespace Gamebeast.Internal.Http
                 return null;
             }
 
-            return HttpRequester.TryParse<List<CohortMembershipEntry>>(response);
+            // Current backend contract: { "cohortExists": bool, "users": [{ userId, isMember }] }.
+            // Older deployments returned the bare array, so accept both.
+            var body = response.Body?.TrimStart();
+            if (!string.IsNullOrEmpty(body) && body[0] == '[')
+            {
+                return HttpRequester.TryParse<List<CohortMembershipEntry>>(response);
+            }
+
+            var parsed = HttpRequester.TryParse<CohortMembershipResponse>(response);
+            if (parsed == null) return null;
+            return parsed.Users ?? new List<CohortMembershipEntry>();
         }
 
         private Dictionary<string, string> BuildHeaders(bool includeLegacyV1Headers)
@@ -207,11 +218,18 @@ namespace Gamebeast.Internal.Http
                 // The v1 markers route still expects these Roblox-era headers.
                 headers["universeid"] = "0";
                 headers["serverid"] = SessionId;
-                headers["isstudio"] = _environmentAlias == "studio" ? "true" : "false";
+                // The v1 routes (markers, cohorts) ignore the "environment" header and route on isstudio:
+                // "true" lands in the development environment, "false" in production.
+                headers["isstudio"] = IsDevelopmentEnvironment(_environmentAlias) ? "true" : "false";
             }
 
             return headers;
         }
+
+        // Same mapping as the Unreal and Godot SDKs: only production is "not studio"; development and
+        // any custom alias fall back to the development side rather than polluting production data.
+        private static bool IsDevelopmentEnvironment(string alias) =>
+            !string.Equals(alias, "production", StringComparison.OrdinalIgnoreCase);
 
         private static string Truncate(string body)
         {
